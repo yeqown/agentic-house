@@ -90,6 +90,15 @@ Sample config:
 | `host` | Jenkins base URL, for example `https://jenkins.example.net/` |
 | `auth` | Jenkins auth in `username:api-token` format |
 
+## Helper commands
+
+- `bin/jenkins-skill context` — derive git host, branch, project, and Jenkins job path.
+- `bin/jenkins-skill runtime` — validate runtime files and Jenkins host/auth configuration.
+- `bin/jenkins-skill metadata` — output context, runtime metadata, job path, host, and all Jenkins parameter definitions.
+- `bin/jenkins-skill trigger-command --param Name=value ...` — validate explicit parameter names and output Jenkins CLI argv.
+- `bin/jenkins-skill last-build` — read latest Jenkins build metadata.
+- `bin/jenkins-skill console-log [--build-number N] [--tail 80]` — read console log text.
+
 ## Parameter schema
 
 Each item in `parameters` must include:
@@ -101,21 +110,24 @@ Optional fields:
 - `default`
 - `availableValues` — format: `[{"value":"...","description":"..."}]`
 
-## Parameter mapping
+## Parameter interpretation
 
-| Name | Rule |
+`parameters` is metadata for LLM-driven build assembly. The helper returns it as-is through `bin/jenkins-skill metadata`.
+
+| Field | Rule |
 | --- | --- |
-| `GitBranch` | value comes from current git branch |
-| `OperatingEnvs` | selected value comes from `availableValues[].value`, payload uses matching `description` |
-| `OperationType` | selected value comes from CLI or `default`, allowed set comes from `availableValues[].value` |
-| `DeployMicroServices` | value comes from CLI or `default` |
-| `Namespace` | omit unless user supplies one, or fail when `required = true` |
-| `AdditionalOps` | value comes from `default` |
+| `name` | exact Jenkins parameter key used in `-p name=value` |
+| `description` | business meaning used by the LLM to map user intent |
+| `required` | if true and no value/default can be inferred, ask the user |
+| `default` | default value the LLM may use when intent does not override it |
+| `availableValues` | valid choices; use `value` as machine choice and `description` for user-facing meaning |
+
+The sample names `GitBranch`, `OperatingEnvs`, `OperationType`, `DeployMicroServices`, `Namespace`, and `AdditionalOps` are examples only. Skill workflow must not depend on those exact names.
 
 ## Job path derivation
 
-- Only `git.example.com` remotes are supported.
-- Supported remote forms are `git@host:group/project.git` and `https://host/group/project.git`.
+- Skill workflow policy supports only `git.example.com` remotes.
+- The helper derives host and job path from supported URL forms for any host: `git@host:group/project.git`, `https://host/group/project.git`, and `ssh://git@host[:port]/group/project.git`.
 - Jenkins job path is always derived as `group/project` from git remote.
 - Job path is not configurable.
 

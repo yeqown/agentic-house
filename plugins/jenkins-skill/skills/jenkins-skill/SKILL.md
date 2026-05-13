@@ -7,7 +7,7 @@ description: Use when the user wants to trigger, monitor, or diagnose a Jenkins 
 
 ## Overview
 
-Natural-language Jenkins workflow for repos on `git.example.com`. Use helper CLI output for deterministic context, runtime, and parameter resolution; reserve LLM flow for clarifying input, confirmation, monitoring, and failure explanation.
+Natural-language Jenkins workflow for repos on `git.example.com`. Use helper CLI output for deterministic git/runtime/Jenkins metadata. The LLM must map user build intent to Jenkins parameters from the parameter definitions returned by `bin/jenkins-skill metadata`; helper code must not hardcode business parameter names or meanings.
 
 ## When to Use
 
@@ -34,10 +34,9 @@ Required local configuration:
 - local tools: `git`, `java`, `curl`, `python3`
 
 Optional user inputs:
-- target environment: `local` or `global`
-- app list for `DeployMicroServices`
-- `Namespace`
-- operation type override
+- any build intent that can be mapped to Jenkins parameter definitions
+- missing required parameter values requested by the LLM after reading metadata
+- confirmation to run the generated Jenkins CLI command
 
 ## Quick Operations
 
@@ -47,7 +46,7 @@ For viewing or diagnosing builds, prefer the helper CLI commands below. They han
 
 1. Run `bin/jenkins-skill last-build` — single call, outputs structured JSON.
 2. On success, format the result for the user:
-   - build number, result, branch, environment, services, builder, duration, URL.
+   - build number, result, branch/current parameters, builder, duration, URL.
 3. On error (missing config, auth failure, no builds), relay the error message.
 
 ### View console log (for failure diagnosis)
@@ -64,32 +63,42 @@ After `last-build`, compare its `parameters` against the current git branch. If 
 
 1. Run `bin/jenkins-skill context` to verify git repo state and derive git host, branch, and Jenkins job path.
 2. If helper output says the remote host is unsupported or the remote URL cannot be parsed, refuse and explain why.
-3. If host is not supported, refuse and explain that this skill only supports repos from `git.example.com`.
-4. Run `bin/jenkins-skill runtime` to resolve the runtime root and required files.
-5. If helper output shows missing runtime files, stop and tell the user which path is missing.
-6. Read Jenkins `host` and `auth` from `${runtime root}/index.json`.
-7. Run `bin/jenkins-skill params ...` to resolve build parameters.
-8. If helper output says environment or operation type is invalid, stop and ask the user instead of guessing.
-9. Before triggering any build or deploy, present the derived job path and final parameters, then ask for explicit user confirmation.
-10. Use helper output as the source of truth for deterministic values.
-11. Fetch current `lastBuild.number` for the derived job through the authenticated Jenkins JSON API.
-12. Trigger the Jenkins build with `jenkins-cli.jar` only after user confirmation.
-13. Poll the job JSON API until `lastBuild.number` increases.
-14. Treat that new build number as the triggered build.
-15. Poll the build API every 10–15 seconds until terminal state.
-16. On failure, run `bin/jenkins-skill console-log` to fetch console tail and classify the failure.
+3. Run `bin/jenkins-skill runtime` to resolve runtime root and required files.
+4. If helper output shows missing runtime files, stop and tell the user which path is missing.
+5. Run `bin/jenkins-skill metadata` to load branch, job path, Jenkins host, runtime root, and complete `parameters` definitions.
+6. Read every parameter definition before deciding build parameters. Use `name`, `description`, `required`, `default`, and `availableValues` to infer values from user intent.
+7. Do not use parameter names or business meanings that are not present in `metadata.parameters`.
+8. For required parameters with no clear value or default, ask the user to choose or provide a value.
+9. For ambiguous user intent, ask one focused question instead of guessing.
+10. Build explicit `name=value` pairs only after all required values are known.
+11. Run `bin/jenkins-skill trigger-command --param Name=value ...` to generate the Jenkins CLI argv and validate parameter names.
+12. Present job path, final parameters, and full Jenkins CLI command to the user.
+13. Trigger the Jenkins build with the generated Jenkins CLI command only after explicit user confirmation.
+14. Use the authenticated Jenkins JSON API for polling here because no helper command currently triggers or monitors newly queued builds.
+15. Poll the job JSON API until `lastBuild.number` increases.
+16. Treat that new build number as the triggered build.
+17. Poll the build API every 10–15 seconds until terminal state.
+18. On failure, run `bin/jenkins-skill console-log --build-number <triggered build number>` to fetch console tail and classify the failure.
 
 ## Parameter Rules
 
-Always derive or send:
-- `GitBranch` = current git branch
-- `OperatingEnvs` = item chosen from `parameters[name=OperatingEnvs].availableValues`
-- `OperationType` = explicit user input or `parameters[name=OperationType].default`
-- `AdditionalOps` = `parameters[name=AdditionalOps].default` or empty string
+The parameter definitions returned by `bin/jenkins-skill metadata` are the source of truth.
 
-Optional parameters:
-- `DeployMicroServices` = comma-separated app names when the user specifies apps; otherwise use `parameters[name=DeployMicroServices].default`
-- `Namespace` = only include when user explicitly supplies it unless `parameters[name=Namespace].required = true`
+For each parameter:
+- `name` is the exact Jenkins parameter key.
+- `description` explains the business meaning.
+- `required` tells whether the build needs a value.
+- `default` can be used when user intent does not override it.
+- `availableValues` lists valid choices when present.
+
+LLM responsibilities:
+- map user intent to parameters by reading descriptions and choices
+- use current git branch when a parameter definition clearly asks for branch
+- use defaults when they satisfy intent and no user override exists
+- ask the user when required values are missing or ambiguous
+- pass only parameter names that exist in metadata
+
+Do not hardcode rules for specific names like `OperatingEnvs`, `OperationType`, `DeployMicroServices`, `Namespace`, or `AdditionalOps`. These names may appear in one team's config, but they are examples, not workflow rules.
 
 ## Failure Handling
 
@@ -101,8 +110,9 @@ Stop and ask the user instead of guessing when:
 - the current branch is empty
 - the runtime root or any required runtime file is missing
 - `index.json` does not contain usable Jenkins `host` or `auth`
-- the target environment is missing or ambiguous
-- the requested operation type is outside the allowed set
+- required Jenkins parameters cannot be inferred from user intent or defaults
+- user intent maps to multiple possible `availableValues` choices
+- `trigger-command` rejects an unknown parameter name
 - Jenkins auth, job lookup, or build-number discovery fails
 - the triggered build number cannot be determined safely
 
@@ -128,9 +138,7 @@ Failure response must always include Jenkins build URL.
 On success, include:
 - job path
 - branch
-- env
-- operation type
-- apps or all
+- resolved Jenkins parameters
 - Jenkins build URL
 - short status summary
 

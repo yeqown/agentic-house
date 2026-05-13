@@ -39,19 +39,12 @@ def load_config(root: Path) -> dict:
     return json.loads(config_path.read_text(encoding="utf-8"))
 
 
-def load_parameters(config: dict) -> dict[str, dict]:
-    items = config.get("parameters", [])
-    if not isinstance(items, list):
-        return {}
-    parameters: dict[str, dict] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name", "")).strip()
-        if not name:
-            continue
-        parameters[name] = item
-    return parameters
+def try_load_config(root: Path) -> tuple[dict | None, str | None]:
+    config_path = root / "index.json"
+    try:
+        return load_config(root), None
+    except (OSError, json.JSONDecodeError) as e:
+        return None, f"index.json cannot be read: {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -101,13 +94,69 @@ def _resolve_runtime_config() -> dict:
     if not config_path.exists():
         return {"ok": False, "error": "index.json is missing", "runtimeRoot": str(root)}
 
-    config = load_config(root)
+    config, error = try_load_config(root)
+    if error:
+        return {"ok": False, "error": error, "runtimeRoot": str(root)}
+
     host = str(config.get("host", "")).strip()
     auth = str(config.get("auth", "")).strip()
     if not host or not auth:
         return {"ok": False, "error": "index.json is missing host or auth", "runtimeRoot": str(root)}
 
     return {"ok": True, "host": host, "auth": auth, "runtimeRoot": str(root)}
+
+
+def _resolve_metadata() -> dict:
+    ctx = _resolve_context()
+    if not ctx.get("ok"):
+        return ctx
+
+    rt = _resolve_runtime_config()
+    if not rt.get("ok"):
+        return rt
+
+    config, error = try_load_config(Path(rt["runtimeRoot"]))
+    if error:
+        return {"ok": False, "error": error, "runtimeRoot": rt["runtimeRoot"]}
+
+    items = config.get("parameters")
+    if not isinstance(items, list):
+        return {
+            "ok": False,
+            "error": "index.json parameters must be a list",
+            "runtimeRoot": rt["runtimeRoot"],
+        }
+
+    parameters: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        parameter = item.copy()
+        parameter["name"] = name
+        parameters.append(parameter)
+
+    return {
+        "ok": True,
+        "remote": ctx["remote"],
+        "branch": ctx["branch"],
+        "host": rt["host"],
+        "runtimeRoot": rt["runtimeRoot"],
+        "jobPath": ctx["jobPath"],
+        "parameters": parameters,
+    }
+
+
+def _parse_param_values(values: list[str]) -> dict[str, str]:
+    parameters: dict[str, str] = {}
+    for value in values:
+        name, separator, parameter_value = value.partition("=")
+        if not separator or not name:
+            raise ValueError(f"invalid parameter assignment: {value}")
+        parameters[name] = parameter_value
+    return parameters
 
 
 def _job_url_base(host: str, job_path: str) -> str:
@@ -172,95 +221,76 @@ def command_runtime(_: argparse.Namespace) -> int:
         "missing": missing,
     }
     if files["config"].exists():
-        config = load_config(root)
-        host = str(config.get("host", "")).strip()
-        auth = str(config.get("auth", "")).strip()
-        if not host:
-            missing_config_fields.append("host")
-        if not auth:
-            missing_config_fields.append("auth")
-        payload["host"] = host
-        payload["authConfigured"] = bool(auth)
+        config, error = try_load_config(root)
+        if error:
+            payload["error"] = error
+        else:
+            host = str(config.get("host", "")).strip()
+            auth = str(config.get("auth", "")).strip()
+            if not host:
+                missing_config_fields.append("host")
+            if not auth:
+                missing_config_fields.append("auth")
+            payload["host"] = host
+            payload["authConfigured"] = bool(auth)
     payload["missingConfigFields"] = missing_config_fields
-    payload["ok"] = not missing and not missing_config_fields
+    payload["ok"] = not missing and not missing_config_fields and "error" not in payload
     return emit(payload, 0 if payload["ok"] else 1)
 
 
-def command_params(args: argparse.Namespace) -> int:
-    branch = git_output("branch", "--show-current")
-    if not branch:
-        return emit({"ok": False, "error": "current branch is empty"}, 1)
+def command_metadata(_: argparse.Namespace) -> int:
+    metadata = _resolve_metadata()
+    return emit(metadata, 0 if metadata.get("ok") else 1)
 
-    root = runtime_root()
-    config_path = root / "index.json"
-    if not config_path.exists():
-        return emit({"ok": False, "error": "index.json is missing", "runtimeRoot": str(root)}, 1)
 
-    config = load_config(root)
-    host = str(config.get("host", "")).strip()
-    auth = str(config.get("auth", "")).strip()
-    if not host or not auth:
-        return emit(
-            {"ok": False, "error": "index.json is missing Jenkins host or auth", "runtimeRoot": str(root)},
-            1,
-        )
+def command_trigger_command(args: argparse.Namespace) -> int:
+    metadata = _resolve_metadata()
+    if not metadata.get("ok"):
+        return emit(metadata, 1)
 
-    parameters = load_parameters(config)
-    required_field_keys = [
-        "GitBranch",
-        "OperatingEnvs",
-        "OperationType",
-        "DeployMicroServices",
-        "Namespace",
-        "AdditionalOps",
+    try:
+        parameters = _parse_param_values(args.param)
+    except ValueError as e:
+        return emit({"ok": False, "error": str(e)}, 1)
+
+    available_parameters = [parameter["name"] for parameter in metadata["parameters"]]
+    available_parameter_names = set(available_parameters)
+    for name in parameters:
+        if name not in available_parameter_names:
+            return emit(
+                {
+                    "ok": False,
+                    "error": "unknown Jenkins parameter",
+                    "parameter": name,
+                    "availableParameters": available_parameters,
+                },
+                1,
+            )
+
+    root = Path(metadata["runtimeRoot"])
+    jar_path = root / "jenkins-cli.jar"
+    if not jar_path.exists():
+        return emit({"ok": False, "error": "jenkins-cli.jar is missing", "path": str(jar_path)}, 1)
+
+    rt = _resolve_runtime_config()
+    if not rt.get("ok"):
+        return emit(rt, 1)
+
+    argv = [
+        "java",
+        "-jar",
+        str(jar_path),
+        "-s",
+        metadata["host"],
+        "-auth",
+        rt["auth"],
+        "build",
+        metadata["jobPath"],
     ]
-    missing_parameter_defs = [field_key for field_key in required_field_keys if field_key not in parameters]
-    if missing_parameter_defs:
-        return emit(
-            {"ok": False, "error": "index.json is missing required parameter definitions", "missingParameterDefinitions": missing_parameter_defs},
-            1,
-        )
+    for name, value in parameters.items():
+        argv.extend(["-p", f"{name}={value}"])
 
-    branch_config = parameters.get("GitBranch", {})
-    environment = parameters.get("OperatingEnvs", {})
-    operation = parameters.get("OperationType", {})
-    services_config = parameters.get("DeployMicroServices", {})
-    namespace_config = parameters.get("Namespace", {})
-    additional_ops = parameters.get("AdditionalOps", {})
-
-    env_values = {
-        item.get("value"): item.get("description", "")
-        for item in environment.get("availableValues", [])
-        if isinstance(item, dict) and item.get("value")
-    }
-    if args.env not in env_values:
-        return emit(
-            {"ok": False, "error": "target environment is missing or ambiguous", "environment": args.env},
-            1,
-        )
-
-    operation_type = args.operation_type or operation.get("default", "FullDeploy")
-    allowed = {item.get("value") for item in operation.get("availableValues", []) if isinstance(item, dict) and item.get("value")}
-    if allowed and operation_type not in allowed:
-        return emit(
-            {"ok": False, "error": "requested operation type is outside the allowed set", "operationType": operation_type},
-            1,
-        )
-
-    params = {
-        branch_config.get("name", "GitBranch"): branch,
-        environment.get("name", "OperatingEnvs"): env_values[args.env],
-        operation.get("name", "OperationType"): operation_type,
-        additional_ops.get("name", "AdditionalOps"): additional_ops.get("default", ""),
-        services_config.get("name", "DeployMicroServices"): args.services or services_config.get("default", ""),
-    }
-    namespace_name = namespace_config.get("name", "Namespace")
-    if args.namespace:
-        params[namespace_name] = args.namespace
-    elif namespace_config.get("required"):
-        return emit({"ok": False, "error": "namespace is required"}, 1)
-
-    return emit({"ok": True, "params": params})
+    return emit({"ok": True, "jobPath": metadata["jobPath"], "parameters": parameters, "argv": argv})
 
 
 def command_last_build(args: argparse.Namespace) -> int:
@@ -371,12 +401,12 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_parser = subparsers.add_parser("runtime")
     runtime_parser.set_defaults(handler=command_runtime)
 
-    params_parser = subparsers.add_parser("params")
-    params_parser.add_argument("--env", required=True)
-    params_parser.add_argument("--operation-type")
-    params_parser.add_argument("--services")
-    params_parser.add_argument("--namespace")
-    params_parser.set_defaults(handler=command_params)
+    metadata_parser = subparsers.add_parser("metadata")
+    metadata_parser.set_defaults(handler=command_metadata)
+
+    trigger_command_parser = subparsers.add_parser("trigger-command")
+    trigger_command_parser.add_argument("--param", action="append", default=[])
+    trigger_command_parser.set_defaults(handler=command_trigger_command)
 
     last_build_parser = subparsers.add_parser("last-build")
     last_build_parser.set_defaults(handler=command_last_build)
