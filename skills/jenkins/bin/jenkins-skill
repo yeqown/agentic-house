@@ -196,6 +196,50 @@ def _jenkins_get_text(url: str, auth: str) -> str:
         raise RuntimeError(f"cannot reach Jenkins: {e.reason}") from e
 
 
+def _normalize_parameter_type(raw_type: str) -> str:
+    mapping = {
+        "StringParameterDefinition": "string",
+        "TextParameterDefinition": "text",
+        "BooleanParameterDefinition": "boolean",
+        "ChoiceParameterDefinition": "choice",
+        "PasswordParameterDefinition": "password",
+    }
+    return mapping.get(raw_type, raw_type or "unknown")
+
+
+def _extract_job_parameters(data: dict) -> list[dict]:
+    parameters: list[dict] = []
+    for prop in data.get("property", []):
+        definitions = prop.get("parameterDefinitions", [])
+        if not isinstance(definitions, list):
+            continue
+        for item in definitions:
+            if not isinstance(item, dict):
+                continue
+            raw_type = str(item.get("type") or item.get("_class") or "").rsplit(".", 1)[-1]
+            default_value = None
+            default_parameter_value = item.get("defaultParameterValue")
+            if isinstance(default_parameter_value, dict):
+                default_value = default_parameter_value.get("value")
+            elif "defaultValue" in item:
+                default_value = item.get("defaultValue")
+            choices = item.get("choices") or item.get("choicesAsString") or []
+            if isinstance(choices, str):
+                choices = [choice for choice in choices.splitlines() if choice]
+            if not isinstance(choices, list):
+                choices = []
+            parameters.append(
+                {
+                    "name": str(item.get("name", "")).strip(),
+                    "type": _normalize_parameter_type(raw_type),
+                    "description": str(item.get("description", "")).strip(),
+                    "default": default_value,
+                    "availableValues": list(choices),
+                }
+            )
+    return [parameter for parameter in parameters if parameter["name"]]
+
+
 # ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
@@ -241,6 +285,32 @@ def command_runtime(_: argparse.Namespace) -> int:
 def command_metadata(_: argparse.Namespace) -> int:
     metadata = _resolve_metadata()
     return emit(metadata, 0 if metadata.get("ok") else 1)
+
+
+def command_job_parameters(_: argparse.Namespace) -> int:
+    ctx = _resolve_context()
+    if not ctx.get("ok"):
+        return emit(ctx, 1)
+
+    rt = _resolve_runtime_config()
+    if not rt.get("ok"):
+        return emit(rt, 1)
+
+    base = _job_url_base(rt["host"], ctx["jobPath"])
+    tree = "property[parameterDefinitions[name,type,_class,description,choices,choicesAsString,defaultValue,defaultParameterValue[value]]]"
+    url = f"{base}api/json?tree={urllib.parse.quote(tree, safe='')}"
+
+    try:
+        data = _jenkins_get(url, rt["auth"])
+    except RuntimeError as e:
+        return emit({"ok": False, "error": str(e)}, 1)
+
+    return emit({
+        "ok": True,
+        "jobPath": ctx["jobPath"],
+        "url": base,
+        "parameters": _extract_job_parameters(data),
+    })
 
 
 def command_trigger_command(args: argparse.Namespace) -> int:
@@ -403,6 +473,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     metadata_parser = subparsers.add_parser("metadata")
     metadata_parser.set_defaults(handler=command_metadata)
+
+    job_parameters_parser = subparsers.add_parser("job-parameters")
+    job_parameters_parser.set_defaults(handler=command_job_parameters)
 
     trigger_command_parser = subparsers.add_parser("trigger-command")
     trigger_command_parser.add_argument("--param", action="append", default=[])

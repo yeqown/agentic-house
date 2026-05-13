@@ -55,6 +55,12 @@ For viewing or diagnosing builds, prefer the helper CLI commands below. They han
 2. `--build-number` defaults to the last build if omitted.
 3. Use the returned `log` field to classify the failure.
 
+### View actual Jenkins job parameters
+
+1. Run `bin/jenkins-skill job-parameters` when local metadata may be stale, incomplete, or missing real candidate values.
+2. Treat returned `parameters` as Jenkins truth for names, defaults, and `availableValues`.
+3. If the command succeeds, prefer Jenkins values over `metadata.parameters` for any conflicting field.
+
 ### Detect branch mismatch
 
 After `last-build`, compare its `parameters` against the current git branch. If the last build was for a different branch, mention this to the user.
@@ -67,22 +73,26 @@ After `last-build`, compare its `parameters` against the current git branch. If 
 4. If helper output shows missing runtime files, stop and tell the user which path is missing.
 5. Run `bin/jenkins-skill metadata` to load branch, job path, Jenkins host, runtime root, and complete `parameters` definitions.
 6. Read every parameter definition before deciding build parameters. Use `name`, `description`, `required`, `default`, and `availableValues` to infer values from user intent.
-7. Do not use parameter names or business meanings that are not present in `metadata.parameters`.
-8. For required parameters with no clear value or default, ask the user to choose or provide a value.
-9. For ambiguous user intent, ask one focused question instead of guessing.
-10. Build explicit `name=value` pairs only after all required values are known.
-11. Run `bin/jenkins-skill trigger-command --param Name=value ...` to generate the Jenkins CLI argv and validate parameter names.
-12. Present job path, final parameters, and full Jenkins CLI command to the user.
-13. Trigger the Jenkins build with the generated Jenkins CLI command only after explicit user confirmation.
-14. Use the authenticated Jenkins JSON API for polling here because no helper command currently triggers or monitors newly queued builds.
-15. Poll the job JSON API until `lastBuild.number` increases.
-16. Treat that new build number as the triggered build.
-17. Poll the build API every 10–15 seconds until terminal state.
-18. On failure, run `bin/jenkins-skill console-log --build-number <triggered build number>` to fetch console tail and classify the failure.
+7. If `metadata.parameters` appears stale, incomplete, or conflicts with Jenkins behavior, run `bin/jenkins-skill job-parameters` and treat its result as source of truth.
+8. If the user asks for “all”, “all services”, “full rollout”, or similar intent and `metadata.parameters` does not provide complete candidate values, run `bin/jenkins-skill job-parameters` to fetch the actual Jenkins choice list before expanding values.
+9. Do not use parameter names or business meanings that are not present in metadata or Jenkins job definitions.
+10. For required parameters with no clear value or default, ask the user to choose or provide a value.
+11. For ambiguous user intent, ask one focused question instead of guessing.
+12. Build explicit `name=value` pairs only after all required values are known.
+13. Run `bin/jenkins-skill trigger-command --param Name=value ...` to generate the Jenkins CLI argv and validate parameter names.
+14. Present job path, final parameters, and full Jenkins CLI command to the user.
+15. Trigger the Jenkins build with the generated Jenkins CLI command only after explicit user confirmation.
+16. Use the authenticated Jenkins JSON API for polling here because no helper command currently triggers or monitors newly queued builds.
+17. Poll the job JSON API until `lastBuild.number` increases.
+18. Treat that new build number as the triggered build.
+19. Poll the build API every 10–15 seconds until terminal state.
+20. On failure, run `bin/jenkins-skill console-log --build-number <triggered build number>` to fetch console tail and classify the failure.
 
 ## Parameter Rules
 
-The parameter definitions returned by `bin/jenkins-skill metadata` are the source of truth.
+The parameter definitions returned by `bin/jenkins-skill metadata` are the default starting point.
+
+`metadata.parameters` is local guidance, not guaranteed Jenkins truth. When Jenkins job definitions disagree with local metadata or local metadata lacks enough candidate values to satisfy user intent, run `bin/jenkins-skill job-parameters` and prefer its returned fields for `name`, `default`, and `availableValues`.
 
 For each parameter:
 - `name` is the exact Jenkins parameter key.
@@ -96,7 +106,7 @@ LLM responsibilities:
 - use current git branch when a parameter definition clearly asks for branch
 - use defaults when they satisfy intent and no user override exists
 - ask the user when required values are missing or ambiguous
-- pass only parameter names that exist in metadata
+- pass only parameter names that exist in metadata or Jenkins job definitions
 
 Do not hardcode rules for specific names like `OperatingEnvs`, `OperationType`, `DeployMicroServices`, `Namespace`, or `AdditionalOps`. These names may appear in one team's config, but they are examples, not workflow rules.
 
