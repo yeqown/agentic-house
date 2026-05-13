@@ -1,156 +1,94 @@
 ---
 name: jenkins
-description: Use when the user wants to trigger, monitor, or diagnose a Jenkins build or deploy for the current repository hosted on git.example.com.
+description: Trigger, monitor, or diagnose Jenkins builds and deploys for the current repository on git.example.com. Use when user wants to deploy, trigger a build, check build status, view console logs, or diagnose deployment failures.
 ---
 
 # Jenkins Skill
 
-## Overview
+Natural-language Jenkins workflow for repos on `git.example.com`. Uses helper CLI for deterministic git/runtime/Jenkins metadata. LLM maps user build intent to Jenkins parameters from definitions returned by `helper.py metadata`.
 
-Natural-language Jenkins workflow for repos on `git.example.com`. Use helper CLI output for deterministic git/runtime/Jenkins metadata. The LLM must map user build intent to Jenkins parameters from the parameter definitions returned by `./skills/jenkins/scripts/helper.py metadata`; helper code must not hardcode business parameter names or meanings.
+## Runtime Setup
+
+- Runtime root: `JENKINS_SKILL_HOME` env var, or fallback `$HOME/.agentic-house/jenkins-skill`
+- Required files: `jenkins-cli.jar`, `index.json`
+- Helper: `./skills/jenkins/scripts/helper.py`
+- Local tools: `git`, `java`, `curl`, `python3`
+- All helper commands run from project root
+
+Config schema, parameter rules, failure classification → [reference.md](reference.md)
 
 ## When to Use
 
-- User wants to deploy the current repo through Jenkins
-- User asks to trigger a build for the current branch
-- User asks to inspect Jenkins results for the current project
-- User asks to diagnose a failing Jenkins deployment for the current repo
+- Deploy current repo through Jenkins
+- Trigger build for current branch
+- Inspect Jenkins results
+- Diagnose failing Jenkins deployment
 
-Do not use when the current repo is not on `git.example.com`.
-
-## Inputs
-
-Required runtime context:
-- current directory is the git project root
-- `origin` remote exists
-- current branch exists
-- remote host is `git.example.com`
-
-Required local configuration:
-- runtime root = `JENKINS_SKILL_HOME` when set; otherwise default to `$HOME/.agentic-house/jenkins-skill`
-- `${runtime root}/jenkins-cli.jar`
-- `${runtime root}/index.json`
-- helper entrypoint: `./skills/jenkins/scripts/helper.py metadata`
-- local tools: `git`, `java`, `curl`, `python3`
-
-Optional user inputs:
-- any build intent that can be mapped to Jenkins parameter definitions
-- missing required parameter values requested by the LLM after reading metadata
-- confirmation to run the generated Jenkins CLI command
+Do not use when the repo is not on `git.example.com`.
 
 ## Quick Operations
 
-For viewing or diagnosing builds, prefer the helper CLI commands below. They handle URL construction, authentication, and response parsing internally — do NOT make manual Jenkins API calls for these operations.
-
 ### View latest build
 
-1. Run `./skills/jenkins/scripts/helper.py last-build` — single call, outputs structured JSON.
-2. On success, format the result for the user:
-   - build number, result, branch/current parameters, builder, duration, URL.
-3. On error (missing config, auth failure, no builds), relay the error message.
+```bash
+./skills/jenkins/scripts/helper.py last-build
+```
 
-### View console log (for failure diagnosis)
+On success, format: build number, result, branch, builder, duration, URL. On error, relay the message.
 
-1. Run `./skills/jenkins/scripts/helper.py console-log [--build-number N] [--tail 80]` — single call.
-2. `--build-number` defaults to the last build if omitted.
-3. Use the returned `log` field to classify the failure.
+After `last-build`, compare its `parameters` against current git branch. If different branch, mention to user.
+
+### View console log
+
+```bash
+./skills/jenkins/scripts/helper.py console-log [--build-number N] [--tail 80]
+```
+
+`--build-number` defaults to last build. Use returned `log` field to classify failure.
 
 ### View actual Jenkins job parameters
 
-1. Run `./skills/jenkins/scripts/helper.py job-parameters` when local metadata may be stale, incomplete, or missing real candidate values.
-2. Treat returned `parameters` as Jenkins truth for names, defaults, and `availableValues`.
-3. If the command succeeds, prefer Jenkins values over `metadata.parameters` for any conflicting field.
+```bash
+./skills/jenkins/scripts/helper.py job-parameters
+```
 
-### Detect branch mismatch
-
-After `last-build`, compare its `parameters` against the current git branch. If the last build was for a different branch, mention this to the user.
+Use when local metadata may be stale, incomplete, or missing candidate values. Treat returned `parameters` as Jenkins truth.
 
 ## Trigger Workflow (build/deploy)
 
-1. Run `./skills/jenkins/scripts/helper.py metadata` first to verify git repo state, resolve runtime configuration, derive job path, and load parameter definitions.
-2. If helper output says the remote host is unsupported, the remote URL cannot be parsed, or runtime config/files are invalid, stop and explain the returned error.
-3. Read every parameter definition before deciding build parameters. Use `name`, `description`, `required`, `default`, and `availableValues` to infer values from user intent.
-4. If `metadata.parameters` appears stale, incomplete, or conflicts with Jenkins behavior, run `./skills/jenkins/scripts/helper.py job-parameters` and treat its result as source of truth.
-5. If the user asks for “all”, “all services”, “full rollout”, or similar intent and `metadata.parameters` does not provide complete candidate values, run `./skills/jenkins/scripts/helper.py job-parameters` to fetch the actual Jenkins choice list before expanding values.
-6. Do not use parameter names or business meanings that are not present in metadata or Jenkins job definitions.
-7. For required parameters with no clear value or default, ask the user to choose or provide a value.
-8. For ambiguous user intent, ask one focused question instead of guessing.
+1. Run `./skills/jenkins/scripts/helper.py metadata` — validates git repo, resolves config, derives job path, loads parameter definitions.
+2. If helper reports unsupported remote, unparseable URL, or invalid config → stop and explain error.
+3. Read every parameter definition. Use `name`, `description`, `required`, `default`, `availableValues` to infer values from user intent.
+4. If `metadata.parameters` appears stale or conflicts → run `job-parameters` and prefer its result.
+5. If user asks for "all"/"all services"/"full rollout" and metadata lacks complete candidate values → run `job-parameters` first.
+6. Do not use parameter names or meanings not present in metadata or Jenkins job definitions.
+7. For required parameters with no clear value/default → ask user to choose.
+8. For ambiguous intent → ask one focused question, not guess.
 9. Build explicit `name=value` pairs only after all required values are known.
-10. Run `./skills/jenkins/scripts/helper.py trigger-command --param Name=value ...` to generate the Jenkins CLI argv and validate parameter names.
-11. Present job path, final parameters, and full Jenkins CLI command to the user.
-12. Trigger the Jenkins build with the generated Jenkins CLI command only after explicit user confirmation.
-13. Use the authenticated Jenkins JSON API for polling here because no helper command currently triggers or monitors newly queued builds.
-14. Poll the job JSON API until `lastBuild.number` increases.
-15. Treat that new build number as the triggered build.
-16. Poll the build API every 10–15 seconds until terminal state.
-17. On failure, run `./skills/jenkins/scripts/helper.py console-log --build-number <triggered build number>` to fetch console tail and classify the failure.
+10. Run `./skills/jenkins/scripts/helper.py trigger-command --param Name=value ...` to generate CLI argv and validate parameter names.
+11. Present job path, final parameters, and full CLI command to user.
+12. Trigger only after explicit user confirmation.
+13. Poll job JSON API until `lastBuild.number` increases, then track that build to terminal state.
+14. On failure → run `console-log --build-number <N>` to fetch log tail and classify.
 
-## Parameter Rules
+## LLM Parameter Responsibilities
 
-The parameter definitions returned by `./skills/jenkins/scripts/helper.py metadata` are the default starting point.
+- Map user intent to parameters by reading descriptions and choices
+- Use current git branch when a parameter definition clearly asks for branch
+- Use defaults when they satisfy intent and no user override exists
+- Ask user when required values are missing or ambiguous
+- Pass only parameter names that exist in metadata or Jenkins definitions
 
-`metadata.parameters` is local guidance, not guaranteed Jenkins truth. When Jenkins job definitions disagree with local metadata or local metadata lacks enough candidate values to satisfy user intent, run `./skills/jenkins/scripts/helper.py job-parameters` and prefer its returned fields for `name`, `default`, and `availableValues`.
-
-For each parameter:
-- `name` is the exact Jenkins parameter key.
-- `description` explains the business meaning.
-- `required` tells whether the build needs a value.
-- `default` can be used when user intent does not override it.
-- `availableValues` lists valid choices when present.
-
-LLM responsibilities:
-- map user intent to parameters by reading descriptions and choices
-- use current git branch when a parameter definition clearly asks for branch
-- use defaults when they satisfy intent and no user override exists
-- ask the user when required values are missing or ambiguous
-- pass only parameter names that exist in metadata or Jenkins job definitions
-
-Do not hardcode rules for specific names like `OperatingEnvs`, `OperationType`, `DeployMicroServices`, `Namespace`, or `AdditionalOps`. These names may appear in one team's config, but they are examples, not workflow rules.
+Do not hardcode rules for specific names like `OperatingEnvs`, `OperationType`, `DeployMicroServices`. These are examples, not workflow rules.
 
 ## Failure Handling
 
-Stop and ask the user instead of guessing when:
-- the current directory is not a git repo
-- `origin` remote is missing
-- the remote host is not `git.example.com`
-- the remote URL cannot be parsed into `group/project`
-- the current branch is empty
-- the runtime root or any required runtime file is missing
-- `index.json` does not contain usable Jenkins `host` or `auth`
-- required Jenkins parameters cannot be inferred from user intent or defaults
-- user intent maps to multiple possible `availableValues` choices
-- `trigger-command` rejects an unknown parameter name
-- Jenkins auth, job lookup, or build-number discovery fails
-- the triggered build number cannot be determined safely
+Stop and ask user when: not a git repo, `origin` missing, remote host not `git.example.com`, URL cannot parse to `group/project`, branch empty, runtime files missing, Jenkins auth/job lookup fails, required parameters cannot be inferred, or `trigger-command` rejects a parameter name.
 
-Never guess values that are not defined by this skill.
-
-## Failure Classification
-
-When the build fails, classify into one of:
-
-1. `infrastructure`
-   - Jenkins unavailable, auth failures, agent offline
-   - Docker, node, pod, or network provisioning failures
-   - SCM fetch, workspace, disk, or timeout failures before app build logic
-2. `business code error`
-   - compile, test, lint, package, migration, app startup, or config errors caused by repo changes
-3. `other`
-   - manual aborts, ambiguous plugin failures, or insufficient signal
-
-Failure response must always include Jenkins build URL.
+Failure classification (infrastructure / business code error / other) → [reference.md](reference.md)
 
 ## Outputs
 
-On success, include:
-- job path
-- branch
-- resolved Jenkins parameters
-- Jenkins build URL
-- short status summary
+On success: job path, branch, resolved parameters, Jenkins build URL, short status summary.
 
-On failure, include:
-- classification (`infrastructure` / `business code error` / `other`)
-- likely reason in 1–2 lines
-- Jenkins build URL
-- next-action hint for dev-side fix vs CI/platform follow-up
+On failure: classification, likely reason in 1–2 lines, Jenkins build URL, next-action hint.

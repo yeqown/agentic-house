@@ -1,60 +1,74 @@
 # Kibana Log Skill Reference
 
+## 目录
+
+- Config file layout
+- index.json schema
+- Per-environment config (`<env-key>.json`)
+- UUID resolution (Kibana API)
+- `load_kibana_context.py` commands
+- Discover URL state model
+- Filter object template
+- Query vs filters
+
 ## Config file layout
 
 ```
 $HOME/.agentic-house/kibana-log/
-├── index.json        # 通用配置（环境列表、字段定义、默认值）
-├── test.json         # 测试环境（host、indices）
-├── prod.json         # 生产环境
-└── pre.json          # 预发环境（可选）
+├── index.json        # Common config (environments, fields, defaults)
+├── test.json         # Per-env config (host, indices)
+├── prod.json
+└── pre.json          # Optional
 ```
 
 Sample config: `skills/kibana/config-sample/`
 
-## index.json
+## index.json schema
 
 ```json
 {
-  "environments": { "<env-key>": "<环境描述>" },
+  "environments": { "<env-key>": "<description>" },
   "fields": [
     {
-      "fieldName": "<ES 字段名>",
-      "description": "<含义>",
+      "fieldName": "<ES field name>",
+      "description": "<meaning>",
       "displayDefault": true
     }
   ],
-  "defaultTimeRange": "<如 1h>"
+  "defaultTimeRange": "<e.g. 1h>"
 }
 ```
 
-- `displayDefault` — `true` 表示默认展示为 Discover 列，`false` 或缺省不展示
+| Field | Description |
+| --- | --- |
+| `environments` | Key maps to `<env-key>.json` filename, value is description |
+| `fields[].fieldName` | Actual ES field name |
+| `fields[].description` | Field meaning for LLM mapping |
+| `fields[].displayDefault` | `true` → show as Discover column by default |
+| `defaultTimeRange` | Default time range (e.g. `1h`, `30m`, `2h`) |
 
-### fields 示例
+### Columns derivation
 
-| fieldName | displayDefault | 含义 |
-|---|---|---|
-| `kubernetes.container_name` | `true` | 应用/容器名 |
-| `message.level` | `true` | 日志等级 |
-| `message.msg` | `true` | 日志消息体 |
-| `@timestamp` | `false` | 时间戳（不展示为列） |
+Collect all `fields` entries where `displayDefault: true`, take `fieldName` values in definition order.
 
-### Columns 生成
-
-收集 `fields` 中 `displayDefault: true` 的条目，按定义顺序取 `fieldName` 组成 columns。
-
-## <env-key>.json
+## Per-environment config (`<env-key>.json`)
 
 ```json
 {
-  "host": "<kibana-base-url>",
-  "indices": { "<index-name>": "<描述>" }
+  "host": "https://kibana.example.net/",
+  "indices": {
+    "example-portal": "Portal logs index",
+    "example-payment": "Payment system logs index"
+  }
 }
 ```
 
-- `indices` — key 是索引名称，value 是描述，UUID 从 API 获取
+| Field | Description |
+| --- | --- |
+| `host` | Kibana base URL |
+| `indices` | Key = index name, value = description. UUID resolved dynamically via API |
 
-## UUID 获取
+## UUID resolution (Kibana API)
 
 ```bash
 curl -s '${HOST}/api/saved_objects/_find?fields=title&fields=type&fields=typeMeta&per_page=10000&type=index-pattern' \
@@ -62,50 +76,20 @@ curl -s '${HOST}/api/saved_objects/_find?fields=title&fields=type&fields=typeMet
   -H 'content-type: application/json'
 ```
 
-Response → `saved_objects[].{ id, attributes.title }`. 匹配 title (去掉 `*`) → 拿 `id` 作 UUID。
+Response: `saved_objects[].{ id, attributes.title }`. Match `title` (strip trailing `*`) → use `id` as UUID.
 
-## 两段式流程
+## `load_kibana_context.py` commands
 
-```
-用户: "查看测试环境 game-openapi 最近 1h 的 error 或 warn 日志"
-  → 先在技能目录跑 python3 scripts/load_kibana_context.py context
-  → 返回 env/host/fields/defaultTimeRange/indexName->uuid mapping
-  → LLM 用 原始请求 + context JSON 解析 Discover state
-  → 若缺必要字段，用 context 里的选项问用户
-  → 在技能目录跑 python3 scripts/load_kibana_context.py build-url --payload-json '<json>'
-  → 最终 URL 直接使用 UUID
-  → 输出 URL，再让用户选择是否打开
-```
-
-## `context` mode
+### `context` mode
 
 ```bash
-python3 scripts/load_kibana_context.py context
-python3 scripts/load_kibana_context.py context --env test
+python3 scripts/load_kibana_context.py context          # All environments
+python3 scripts/load_kibana_context.py context --env test  # Single environment
 ```
 
-返回重点：
-- environments
-- fields
-- defaultTimeRange
-- per-env host
-- per-env `indices` mapping (`indexName -> uuid`)
+Returns: `environments`, `fields`, `defaultTimeRange`, per-env `host`, `indexName -> uuid` mapping.
 
-## LLM 参数解析职责
-
-LLM 负责从原始自然语言里解析：
-- `environment`
-- `indexName`
-- `indexUuid`
-- `globalState`
-- `appState.columns`
-- `appState.sort`
-- `appState.filters`
-- `appState.query`
-
-脚本不再解析自然语言，也不再预设 service / log-level / namespace / keyword 这些语义字段。
-
-## `build-url` mode
+### `build-url` mode
 
 ```bash
 python3 scripts/load_kibana_context.py build-url \
@@ -125,43 +109,31 @@ python3 scripts/load_kibana_context.py build-url \
   }'
 ```
 
-必填 payload 字段：
-- `host`
-- `indexUuid`
-- `globalState.time.from`
-- `globalState.time.to`
+Required payload fields: `host`, `indexUuid`, `globalState.time.from`, `globalState.time.to`
 
-可选 payload 字段：
-- `indexName`
-- `globalState.refreshInterval`
-- `globalState.filters`
-- `appState.columns`
-- `appState.sort`
-- `appState.filters`
-- `appState.query`
-- `appState.interval`
+Optional payload fields: `indexName`, `globalState.refreshInterval`, `globalState.filters`, `appState.columns`, `appState.sort`, `appState.filters`, `appState.query`, `appState.interval`
 
 ## Discover URL state model
-
-`_g`:
-- `time`
-- `refreshInterval`
-- global `filters`
-
-`_a`:
-- `index`
-- `columns`
-- `sort`
-- app `filters`
-- `query`
-
-## URL template
 
 ```
 ${HOST}/app/discover#/?_g=${RISON_GLOBAL_STATE}&_a=${RISON_APP_STATE}
 ```
 
-## Filter template
+### `_g` (global state)
+
+- `time` — `{ "from": "now-1h", "to": "now" }`
+- `refreshInterval`
+- global `filters`
+
+### `_a` (app state)
+
+- `index` — UUID of the index pattern
+- `columns` — field names for display
+- `sort` — sort field and order
+- app `filters`
+- `query` — `{ "language": "kuery", "query": "..." }`
+
+## Filter object template
 
 ```json
 {
@@ -179,5 +151,9 @@ ${HOST}/app/discover#/?_g=${RISON_GLOBAL_STATE}&_a=${RISON_APP_STATE}
 }
 ```
 
-`filters` 适合 exact/range/exists 等结构化约束。
-`appState.query.query` 适合 OR / AND / 括号 / 文本搜索等 KQL 逻辑。
+`meta.index` must match the top-level `index` UUID.
+
+## Query vs filters
+
+- `filters` — structured constraints: exact match, range, exists
+- `appState.query.query` — KQL logic: OR, AND, parentheses, text search
