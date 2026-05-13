@@ -1,0 +1,31 @@
+{
+  "name": "agentic-house-skills",
+  "owner": {
+    "name": "yeqown",
+    "email": ""
+  },
+  "metadata": {
+    "description": "Agentic House Claude skills catalog",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "ci-cd-skills",
+      "description": "CI/CD automation skills for triggering, monitoring, and diagnosing build pipelines",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/jenkins-skill"
+      ]
+    },
+    {
+      "name": "observability-skills",
+      "description": "Observability skills for log investigation and operational diagnostics",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/kibana-log"
+      ]
+    }
+  ]
+}
