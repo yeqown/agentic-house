@@ -1,0 +1,51 @@
+{
+  "host": "https://jenkins.example.com/",
+  "auth": "demo:token",
+  "parameters": [
+    {
+      "name": "GitBranch",
+      "description": "Current git branch name sent to Jenkins.",
+      "required": true,
+      "default": "git.branch"
+    },
+    {
+      "name": "OperatingEnvs",
+      "description": "Target runtime environment.",
+      "required": true,
+      "availableValues": [
+        { "value": "local", "description": "example local environment" },
+        { "value": "global", "description": "example global environment" }
+      ]
+    },
+    {
+      "name": "OperationType",
+      "description": "Jenkins operation type.",
+      "required": true,
+      "default": "FullDeploy",
+      "availableValues": [
+        { "value": "FullDeploy", "description": "Full deploy flow." },
+        { "value": "BuildForProd", "description": "Build artifacts for production." },
+        { "value": "UpdateConfigMapAndRestart", "description": "Update config and restart workload." },
+        { "value": "UpdateManifestWithoutWorkload", "description": "Update manifest without workload rollout." },
+        { "value": "Reconfig", "description": "Reapply runtime config." }
+      ]
+    },
+    {
+      "name": "DeployMicroServices",
+      "description": "Comma-separated service list; empty means all services.",
+      "required": true,
+      "default": ""
+    },
+    {
+      "name": "Namespace",
+      "description": "Kubernetes namespace override.",
+      "required": false
+    },
+    {
+      "name": "AdditionalOps",
+      "description": "Additional Jenkins operation flags.",
+      "required": true,
+      "default": ""
+    }
+  ]
+}

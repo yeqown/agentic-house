@@ -1,0 +1,4 @@
+{
+  "name": "kibana-log",
+  "description": "Claude Code plugin for constructing and opening Kibana log pages from natural language queries"
+}

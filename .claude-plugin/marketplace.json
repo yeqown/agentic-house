@@ -1,0 +1,16 @@
+{
+  "name": "agentic-house",
+  "owner": {
+    "name": "Yeqown.Y"
+  },
+  "plugins": [
+    {
+      "name": "jenkins-skill",
+      "source": "./plugins/jenkins-skill"
+    },
+    {
+      "name": "kibana-log",
+      "source": "./plugins/kibana-log"
+    }
+  ]
+}

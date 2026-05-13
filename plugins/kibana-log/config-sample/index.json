@@ -1,0 +1,29 @@
+{
+  "environments": {
+    "test": "example test environment",
+    "prod": "example production environment"
+  },
+  "fields": [
+    {
+      "fieldName": "containerName",
+      "description": "应用/容器名称，用于按服务过滤日志",
+      "displayDefault": true
+    },
+    {
+      "fieldName": "logLevel",
+      "description": "日志等级，如 ERROR/WARN/INFO/DEBUG",
+      "displayDefault": true
+    },
+    {
+      "fieldName": "message",
+      "description": "日志消息体，用于关键词搜索",
+      "displayDefault": true
+    },
+    {
+      "fieldName": "timestamp",
+      "description": "日志事件时间戳",
+      "displayDefault": false
+    }
+  ],
+  "defaultTimeRange": "1h"
+}

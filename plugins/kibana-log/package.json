@@ -1,0 +1,7 @@
+{
+  "name": "kibana-log",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code Kibana log search skill — natural language to Kibana Discover URLs",
+  "license": "MIT"
+}

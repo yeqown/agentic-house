@@ -1,0 +1,7 @@
+{
+  "name": "jenkins-skill",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code Jenkins workflow skill for git.example.com repositories",
+  "license": "MIT"
+}

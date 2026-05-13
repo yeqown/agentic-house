@@ -1,0 +1,399 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+
+def emit(payload: dict, exit_code: int = 0) -> int:
+    print(json.dumps(payload, ensure_ascii=False))
+    return exit_code
+
+
+def runtime_root() -> Path:
+    value = os.environ.get("JENKINS_SKILL_HOME")
+    if value:
+        return Path(value).expanduser()
+    return Path.home() / ".agentic-house" / "jenkins-skill"
+
+
+def git_output(*args: str) -> str:
+    result = subprocess.run(["git", *args], check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def load_config(root: Path) -> dict:
+    config_path = root / "index.json"
+    return json.loads(config_path.read_text(encoding="utf-8"))
+
+
+def load_parameters(config: dict) -> dict[str, dict]:
+    items = config.get("parameters", [])
+    if not isinstance(items, list):
+        return {}
+    parameters: dict[str, dict] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        parameters[name] = item
+    return parameters
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers for subcommands that need context + Jenkins API access
+# ---------------------------------------------------------------------------
+
+_REMOTE_PATTERNS = [
+    re.compile(r"^git@(?P<host>[^:]+):(?P<group>.+)/(?P<project>[^/]+?)\.git$"),
+    re.compile(r"^https://(?P<host>[^/]+)/(?P<group>.+)/(?P<project>[^/]+?)\.git$"),
+    re.compile(r"^ssh://git@(?P<host>[^:/]+)(?::\d+)?/(?P<group>.+)/(?P<project>[^/]+?)\.git$"),
+]
+
+
+def _resolve_context() -> dict:
+    if git_output("rev-parse", "--is-inside-work-tree") != "true":
+        return {"ok": False, "error": "current directory is not a git repo"}
+
+    remote = git_output("remote", "get-url", "origin")
+    branch = git_output("branch", "--show-current")
+    if not remote:
+        return {"ok": False, "error": "origin remote is missing"}
+    if not branch:
+        return {"ok": False, "error": "current branch is empty"}
+
+    for pattern in _REMOTE_PATTERNS:
+        match = pattern.match(remote)
+        if not match:
+            continue
+        group = match.group("group")
+        project = match.group("project")
+        return {
+            "ok": True,
+            "remote": remote,
+            "branch": branch,
+            "host": match.group("host"),
+            "group": group,
+            "project": project,
+            "jobPath": f"{group}/{project}",
+        }
+
+    return {"ok": False, "error": "remote URL cannot be parsed into group/project", "remote": remote}
+
+
+def _resolve_runtime_config() -> dict:
+    root = runtime_root()
+    config_path = root / "index.json"
+    if not config_path.exists():
+        return {"ok": False, "error": "index.json is missing", "runtimeRoot": str(root)}
+
+    config = load_config(root)
+    host = str(config.get("host", "")).strip()
+    auth = str(config.get("auth", "")).strip()
+    if not host or not auth:
+        return {"ok": False, "error": "index.json is missing host or auth", "runtimeRoot": str(root)}
+
+    return {"ok": True, "host": host, "auth": auth, "runtimeRoot": str(root)}
+
+
+def _job_url_base(host: str, job_path: str) -> str:
+    if not host.endswith("/"):
+        host += "/"
+    parts = job_path.strip("/").split("/")
+    return host + "/".join(f"job/{p}" for p in parts) + "/"
+
+
+def _jenkins_get(url: str, auth: str) -> dict:
+    username, token = auth.split(":", 1)
+    credentials = base64.b64encode(f"{username}:{token}".encode()).decode()
+    req = urllib.request.Request(url, headers={"Authorization": f"Basic {credentials}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise RuntimeError("Jenkins auth failed — check index.json auth credentials") from e
+        if e.code == 404:
+            raise RuntimeError(f"Jenkins resource not found: {url}") from e
+        raise RuntimeError(f"Jenkins returned HTTP {e.code}: {e.reason}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"cannot reach Jenkins: {e.reason}") from e
+
+
+def _jenkins_get_text(url: str, auth: str) -> str:
+    username, token = auth.split(":", 1)
+    credentials = base64.b64encode(f"{username}:{token}".encode()).decode()
+    req = urllib.request.Request(url, headers={"Authorization": f"Basic {credentials}"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Jenkins returned HTTP {e.code}: {e.reason}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"cannot reach Jenkins: {e.reason}") from e
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+
+def command_context(_: argparse.Namespace) -> int:
+    ctx = _resolve_context()
+    return emit(ctx, 0 if ctx.get("ok") else 1)
+
+
+def command_runtime(_: argparse.Namespace) -> int:
+    root = runtime_root()
+    files = {
+        "cliJar": root / "jenkins-cli.jar",
+        "config": root / "index.json",
+    }
+    missing = [name for name, path in files.items() if not path.exists()]
+    missing_config_fields: list[str] = []
+    payload = {
+        "ok": False,
+        "runtimeRoot": str(root),
+        "files": {name: str(path) for name, path in files.items()},
+        "missing": missing,
+    }
+    if files["config"].exists():
+        config = load_config(root)
+        host = str(config.get("host", "")).strip()
+        auth = str(config.get("auth", "")).strip()
+        if not host:
+            missing_config_fields.append("host")
+        if not auth:
+            missing_config_fields.append("auth")
+        payload["host"] = host
+        payload["authConfigured"] = bool(auth)
+    payload["missingConfigFields"] = missing_config_fields
+    payload["ok"] = not missing and not missing_config_fields
+    return emit(payload, 0 if payload["ok"] else 1)
+
+
+def command_params(args: argparse.Namespace) -> int:
+    branch = git_output("branch", "--show-current")
+    if not branch:
+        return emit({"ok": False, "error": "current branch is empty"}, 1)
+
+    root = runtime_root()
+    config_path = root / "index.json"
+    if not config_path.exists():
+        return emit({"ok": False, "error": "index.json is missing", "runtimeRoot": str(root)}, 1)
+
+    config = load_config(root)
+    host = str(config.get("host", "")).strip()
+    auth = str(config.get("auth", "")).strip()
+    if not host or not auth:
+        return emit(
+            {"ok": False, "error": "index.json is missing Jenkins host or auth", "runtimeRoot": str(root)},
+            1,
+        )
+
+    parameters = load_parameters(config)
+    required_field_keys = [
+        "GitBranch",
+        "OperatingEnvs",
+        "OperationType",
+        "DeployMicroServices",
+        "Namespace",
+        "AdditionalOps",
+    ]
+    missing_parameter_defs = [field_key for field_key in required_field_keys if field_key not in parameters]
+    if missing_parameter_defs:
+        return emit(
+            {"ok": False, "error": "index.json is missing required parameter definitions", "missingParameterDefinitions": missing_parameter_defs},
+            1,
+        )
+
+    branch_config = parameters.get("GitBranch", {})
+    environment = parameters.get("OperatingEnvs", {})
+    operation = parameters.get("OperationType", {})
+    services_config = parameters.get("DeployMicroServices", {})
+    namespace_config = parameters.get("Namespace", {})
+    additional_ops = parameters.get("AdditionalOps", {})
+
+    env_values = {
+        item.get("value"): item.get("description", "")
+        for item in environment.get("availableValues", [])
+        if isinstance(item, dict) and item.get("value")
+    }
+    if args.env not in env_values:
+        return emit(
+            {"ok": False, "error": "target environment is missing or ambiguous", "environment": args.env},
+            1,
+        )
+
+    operation_type = args.operation_type or operation.get("default", "FullDeploy")
+    allowed = {item.get("value") for item in operation.get("availableValues", []) if isinstance(item, dict) and item.get("value")}
+    if allowed and operation_type not in allowed:
+        return emit(
+            {"ok": False, "error": "requested operation type is outside the allowed set", "operationType": operation_type},
+            1,
+        )
+
+    params = {
+        branch_config.get("name", "GitBranch"): branch,
+        environment.get("name", "OperatingEnvs"): env_values[args.env],
+        operation.get("name", "OperationType"): operation_type,
+        additional_ops.get("name", "AdditionalOps"): additional_ops.get("default", ""),
+        services_config.get("name", "DeployMicroServices"): args.services or services_config.get("default", ""),
+    }
+    namespace_name = namespace_config.get("name", "Namespace")
+    if args.namespace:
+        params[namespace_name] = args.namespace
+    elif namespace_config.get("required"):
+        return emit({"ok": False, "error": "namespace is required"}, 1)
+
+    return emit({"ok": True, "params": params})
+
+
+def command_last_build(args: argparse.Namespace) -> int:
+    ctx = _resolve_context()
+    if not ctx.get("ok"):
+        return emit(ctx, 1)
+
+    rt = _resolve_runtime_config()
+    if not rt.get("ok"):
+        return emit(rt, 1)
+
+    base = _job_url_base(rt["host"], ctx["jobPath"])
+    tree = "lastBuild[number,url,result,building,duration,timestamp,actions[causes[userId,shortDescription],parameters[name,value]]]"
+    url = f"{base}api/json?tree={urllib.parse.quote(tree, safe='')}"
+
+    try:
+        data = _jenkins_get(url, rt["auth"])
+    except RuntimeError as e:
+        return emit({"ok": False, "error": str(e)}, 1)
+
+    build = data.get("lastBuild")
+    if not build:
+        return emit({"ok": False, "error": "no builds found for this job"}, 1)
+
+    params: dict[str, str] = {}
+    causes: list[dict] = []
+    for action in build.get("actions", []):
+        for param in action.get("parameters", []):
+            if param.get("name") and param.get("value") is not None:
+                params[param["name"]] = param["value"]
+        for cause in action.get("causes", []):
+            causes.append(cause)
+
+    duration_ms = build.get("duration", 0)
+    if build.get("building") and build.get("timestamp"):
+        duration_ms = int(time.time() * 1000) - build["timestamp"]
+
+    return emit({
+        "ok": True,
+        "branch": ctx["branch"],
+        "jobPath": ctx["jobPath"],
+        "buildNumber": build["number"],
+        "url": build["url"],
+        "result": build.get("result") or ("RUNNING" if build.get("building") else "UNKNOWN"),
+        "building": build.get("building", False),
+        "durationMs": duration_ms,
+        "timestamp": build.get("timestamp"),
+        "parameters": params,
+        "causes": causes,
+    })
+
+
+def command_console_log(args: argparse.Namespace) -> int:
+    ctx = _resolve_context()
+    if not ctx.get("ok"):
+        return emit(ctx, 1)
+
+    rt = _resolve_runtime_config()
+    if not rt.get("ok"):
+        return emit(rt, 1)
+
+    base = _job_url_base(rt["host"], ctx["jobPath"])
+    build_number = args.build_number
+
+    if not build_number:
+        tree = "lastBuild[number]"
+        url = f"{base}api/json?tree={urllib.parse.quote(tree, safe='')}"
+        try:
+            data = _jenkins_get(url, rt["auth"])
+        except RuntimeError as e:
+            return emit({"ok": False, "error": str(e)}, 1)
+        build_number = data.get("lastBuild", {}).get("number")
+        if not build_number:
+            return emit({"ok": False, "error": "no builds found for this job"}, 1)
+
+    console_url = f"{base}{build_number}/consoleText"
+    try:
+        text = _jenkins_get_text(console_url, rt["auth"])
+    except RuntimeError as e:
+        return emit({"ok": False, "error": str(e), "buildNumber": build_number}, 1)
+
+    lines = text.splitlines()
+    tail_count = args.tail or 80
+    tailed = lines[-tail_count:] if len(lines) > tail_count else lines
+
+    return emit({
+        "ok": True,
+        "buildNumber": build_number,
+        "url": f"{base}{build_number}/",
+        "totalLines": len(lines),
+        "tailLines": len(tailed),
+        "log": "\n".join(tailed),
+    })
+
+
+# ---------------------------------------------------------------------------
+# CLI parser
+# ---------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="jenkins-skill")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    context_parser = subparsers.add_parser("context")
+    context_parser.set_defaults(handler=command_context)
+
+    runtime_parser = subparsers.add_parser("runtime")
+    runtime_parser.set_defaults(handler=command_runtime)
+
+    params_parser = subparsers.add_parser("params")
+    params_parser.add_argument("--env", required=True)
+    params_parser.add_argument("--operation-type")
+    params_parser.add_argument("--services")
+    params_parser.add_argument("--namespace")
+    params_parser.set_defaults(handler=command_params)
+
+    last_build_parser = subparsers.add_parser("last-build")
+    last_build_parser.set_defaults(handler=command_last_build)
+
+    console_log_parser = subparsers.add_parser("console-log")
+    console_log_parser.add_argument("--build-number", type=int, default=None)
+    console_log_parser.add_argument("--tail", type=int, default=80)
+    console_log_parser.set_defaults(handler=command_console_log)
+
+    return parser
+
+
+def main(argv: list[str]) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

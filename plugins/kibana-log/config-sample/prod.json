@@ -1,0 +1,7 @@
+{
+  "host": "https://example-prod-kibana.example.com/",
+  "indices": {
+    "example-service-a": "Example service A log index",
+    "example-service-b": "Example service B log index"
+  }
+}
