@@ -13,7 +13,7 @@
       "name": "ci-cd-skills",
       "description": "CI/CD automation skills for triggering, monitoring, and diagnosing build pipelines",
       "source": "./",
-      "strict": false,
+      "strict": true,
       "skills": [
         "./skills/jenkins"
       ]
@@ -22,7 +22,7 @@
       "name": "observability-skills",
       "description": "Observability skills for log investigation and operational diagnostics",
       "source": "./",
-      "strict": false,
+      "strict": true,
       "skills": [
         "./skills/kibana"
       ]
