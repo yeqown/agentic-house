@@ -1,39 +1,54 @@
-# agentic-house
+# Agentic House Skills
 
-Internal Claude Code marketplace for the `jenkins-skill` plugin.
+A collection of self-contained Claude skills modeled after the structure of `anthropics/skills`.
 
-## Install marketplace
+This repository is a pure skills repository. It is not a Claude Code plugin marketplace package.
 
-Add this repository as a Claude Code marketplace:
-
-```text
-/plugin marketplace add git@github.com:yeqown/agentic-house.git
-```
-
-## Install plugin
-
-After the marketplace is added:
+## Layout
 
 ```text
-/plugin install jenkins-skill@agentic-house
-/reload-plugins
+skills/<skill-name>/
+├── SKILL.md
+├── README.md
+├── reference.md
+├── bin/
+└── config-sample/
 ```
 
-## Update plugin
+Only `SKILL.md` is required. Other files are included when the skill needs human setup docs, longer references, helper scripts, or sample config.
 
-```text
-/plugin marketplace update agentic-house
-/plugin update jenkins-skill@agentic-house
-/reload-plugins
+## Skills
+
+| Skill | Purpose |
+| --- | --- |
+| `jenkins-skill` | Trigger, monitor, and diagnose Jenkins builds using repository context and Jenkins parameter metadata. |
+| `kibana-log` | Load Kibana index context and generate Discover links for application log investigation. |
+
+## Use a Skill
+
+Copy the skill directory you need:
+
+```bash
+cp -R skills/<skill-name> /path/to/your/skills/
 ```
 
-## Repository layout
+Then load it using the skill mechanism supported by your Claude environment.
 
-- marketplace metadata lives at `.claude-plugin/marketplace.json`
-- plugin content lives at `plugins/jenkins-skill`
+## Create a Skill
 
-## Plugin runtime
+Start from the template:
 
-The plugin itself still uses `JENKINS_SKILL_HOME` and documents runtime setup in:
+```bash
+cp -R template skills/new-skill
+```
 
-- `plugins/jenkins-skill/README.md`
+Update:
+- `skills/new-skill/SKILL.md`
+- optional `README.md`
+- optional `reference.md`
+- optional helper scripts under `bin/`
+- optional sample config under `config-sample/`
+
+## Package Convention
+
+See `spec/SKILL.md`.

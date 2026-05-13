@@ -25,7 +25,7 @@ Required files inside the resolved runtime root:
 - `index.json` — team/project specific Jenkins config, including `host` and `auth`
 
 Sample config:
-- `plugins/jenkins-skill/config-sample/index.json`
+- `skills/jenkins-skill/config-sample/index.json`
 
 ## index.json schema
 

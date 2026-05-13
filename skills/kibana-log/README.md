@@ -8,7 +8,7 @@ Claude Code plugin for constructing and opening Kibana Discover log search URLs 
 export KIBANA_LOG_SKILL_HOME="$HOME/.agentic-house/kibana-log"
 
 # Copy sample config and edit
-cp -r /path/to/plugins/kibana-log/config-sample/* "$KIBANA_LOG_SKILL_HOME/"
+cp -r /path/to/skills/kibana-log/config-sample/* "$KIBANA_LOG_SKILL_HOME/"
 
 # Edit each file with your actual values
 # 1. index.json  — environments, fields, defaults (usually no change needed)
@@ -62,9 +62,3 @@ This means adding new indices only requires editing `<env>.json` → `indices` �
 
 Helper CLI entrypoint:
 - `bin/load_kibana_context.py --query "查看测试环境用户平台 user-svc 日志"`
-
-## Local plugin development
-
-```bash
-claude --plugin-dir /absolute/path/to/agentic-house/plugins/kibana-log
-```

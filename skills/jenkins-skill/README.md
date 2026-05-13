@@ -20,10 +20,10 @@ Example:
 RUNTIME_ROOT="${JENKINS_SKILL_HOME:-$HOME/.agentic-house/jenkins-skill}"
 mkdir -p "$RUNTIME_ROOT"
 cp /path/to/jenkins-cli.jar "$RUNTIME_ROOT/jenkins-cli.jar"
-cp plugins/jenkins-skill/config-sample/index.json "$RUNTIME_ROOT/index.json"
+cp skills/jenkins-skill/config-sample/index.json "$RUNTIME_ROOT/index.json"
 ```
 
-`plugins/jenkins-skill/config-sample/index.json` is sample runtime config. Copy it first, then set Jenkins `host`, `auth`, and parameter definitions for your team.
+`skills/jenkins-skill/config-sample/index.json` is sample runtime config. Copy it first, then set Jenkins `host`, `auth`, and parameter definitions for your team.
 
 Helper CLI entrypoint:
 - `bin/jenkins-skill context`
@@ -59,15 +59,3 @@ Recommended operator flow:
 4. run `bin/jenkins-skill trigger-command --param Name=value ...`
 5. confirm returned command with the user
 6. execute the Jenkins CLI command after confirmation
-
-## Local plugin development
-
-```bash
-claude --plugin-dir /absolute/path/to/agentic-house/plugins/jenkins-skill
-```
-
-## Tests
-
-```bash
-bash tests/claude-code/run-skill-tests.sh
-```

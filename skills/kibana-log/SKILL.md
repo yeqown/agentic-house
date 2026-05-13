@@ -30,7 +30,7 @@ Required local configuration:
 - `load_kibana_context.py` — helper loader that emits one JSON context bundle for the model
 - local tools: `curl`, `jq`, `open` (macOS) or `xdg-open` (Linux)
 
-A sample config is provided at `plugins/kibana-log/config-sample/`. Copy it to the runtime root and edit values.
+A sample config is provided at `skills/kibana-log/config-sample/`. Copy it to the runtime root and edit values.
 
 Optional user inputs:
 - keyword / search term
