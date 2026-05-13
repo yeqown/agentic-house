@@ -7,7 +7,6 @@ import os
 import re
 import sys
 from pathlib import Path
-from urllib.parse import quote
 
 
 UUID_PLACEHOLDER = "__INDEX_UUID__"
@@ -108,21 +107,26 @@ def resolve_service(query: str, override: str | None) -> str | None:
     if override:
         return override
 
-    service_before_logs = re.search(r"([A-Za-z][A-Za-z0-9_-]*)\s+(?:最近\s*\d+\s*(?:个)?(?:小时|分钟)\s+)?(?:ERROR|WARN|INFO|DEBUG)?\s*日志", query, re.IGNORECASE)
+    service_before_logs = re.search(
+        r"([A-Za-z][A-Za-z0-9_-]*)\s+(?:最近\s*\d+\s*(?:个)?(?:小时|分钟)\s*)?(?:ERROR|WARN|INFO|DEBUG)?\s*(?:的)?\s*日志(?:链接)?",
+        query,
+        re.IGNORECASE,
+    )
     if service_before_logs:
         return service_before_logs.group(1)
 
-    match = re.search(r"([A-Za-z][A-Za-z0-9_-]*)\s*(?:的)?日志", query)
+    match = re.search(r"([A-Za-z][A-Za-z0-9_-]*)\s*(?:的)?日志(?:链接)?", query)
     if match:
         return match.group(1)
 
     return None
 
 
-def select_fields(fields: list[dict[str, object]], keyword: str) -> tuple[str | None, str | None, str | None, list[str]]:
+def select_fields(fields: list[dict[str, object]], keyword: str) -> tuple[str | None, str | None, str | None, str, list[str]]:
     service_field = None
     level_field = None
     message_field = None
+    timestamp_field = "@timestamp"
     columns: list[str] = []
 
     for item in fields:
@@ -139,8 +143,10 @@ def select_fields(fields: list[dict[str, object]], keyword: str) -> tuple[str | 
             level_field = field_name
         if "日志消息体" in description or "关键词" in description:
             message_field = field_name
+        if "时间戳" in description or field_name == "@timestamp":
+            timestamp_field = field_name
 
-    return service_field, level_field, message_field, columns
+    return service_field, level_field, message_field, timestamp_field, columns
 
 
 def build_filters(index_uuid: str, service_field: str | None, service: str | None, level_field: str | None, log_level: str | None) -> list[dict[str, object]]:
@@ -166,20 +172,77 @@ def build_filters(index_uuid: str, service_field: str | None, service: str | Non
     return filters
 
 
-def build_url_skeleton(host: str, columns: list[str], time_range: dict[str, str], filters: list[dict[str, object]], message_field: str | None, keyword: str) -> str:
-    query = "*"
+def rison_quote(value: str) -> str:
+    escaped = value.replace("'", "!'")
+    return f"'{escaped}'"
+
+
+def rison_key(key: str) -> str:
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_./~-]*", key):
+        return key
+    return rison_quote(key)
+
+
+def rison_atom(value: object) -> str:
+    if value is None:
+        return "!n"
+    if value is True:
+        return "!t"
+    if value is False:
+        return "!f"
+    if isinstance(value, str):
+        if value == "":
+            return "''"
+        if value == UUID_PLACEHOLDER or value.startswith("@"):
+            return rison_quote(value)
+        if re.fullmatch(r"[A-Za-z0-9_./~-]+", value):
+            return value
+        return rison_quote(value)
+    return str(value)
+
+
+def to_rison(value: object) -> str:
+    if isinstance(value, dict):
+        items = [f"{rison_key(key)}:{to_rison(item)}" for key, item in value.items()]
+        return f"({','.join(items)})"
+    if isinstance(value, list):
+        items = ",".join(to_rison(item) for item in value)
+        return f"!({items})"
+    return rison_atom(value)
+
+
+def build_url_skeleton(
+    host: str,
+    columns: list[str],
+    time_range: dict[str, str],
+    filters: list[dict[str, object]],
+    message_field: str | None,
+    keyword: str,
+    timestamp_field: str,
+) -> str:
+    query = ""
     if keyword and message_field:
         query = f'{message_field}:"{keyword}"'
 
-    columns_token = ",".join(columns)
-    filters_token = quote(json.dumps(filters, ensure_ascii=False, separators=(",", ":")), safe="!()':,{}[]")
-    query_token = quote(query, safe="*:\"-_")
+    app_state = {
+        "columns": columns,
+        "filters": filters,
+        "index": UUID_PLACEHOLDER,
+        "interval": "auto",
+        "query": {"language": "kuery", "query": query},
+        "sort": [[timestamp_field, "desc"]],
+    }
+    global_state = {
+        "filters": [],
+        "refreshInterval": {"pause": True, "value": 0},
+        "time": {"from": time_range["from"], "to": time_range["to"]},
+    }
+
     host_prefix = host.rstrip("/")
     return (
-        f"{host_prefix}/app/discover#/?_g=(filters:!(),refreshInterval:(pause:!t,value:0),"
-        f"time:(from:'{time_range['from']}',to:'{time_range['to']}'))"
-        f"&_a=(columns:!({columns_token}),filters:{filters_token},index:'{UUID_PLACEHOLDER}',interval:auto,"
-        f"query:(language:kuery,query:'{query_token}'),sort:!(!('timestamp',desc)))"
+        f"{host_prefix}/app/discover#/"
+        f"?_a={to_rison(app_state)}"
+        f"&_g={to_rison(global_state)}"
     )
 
 
@@ -251,9 +314,9 @@ def main(argv: list[str]) -> int:
     if service is None:
         missing.append("service")
 
-    service_field, level_field, message_field, columns = select_fields(fields if isinstance(fields, list) else [], keyword)
+    service_field, level_field, message_field, timestamp_field, columns = select_fields(fields if isinstance(fields, list) else [], keyword)
     filters = build_filters(UUID_PLACEHOLDER, service_field, service, level_field, log_level)
-    url_skeleton = build_url_skeleton(host, columns, time_range, filters, message_field, keyword) if host else ""
+    url_skeleton = build_url_skeleton(host, columns, time_range, filters, message_field, keyword, timestamp_field) if host else ""
 
     payload = {
         "ok": True,
