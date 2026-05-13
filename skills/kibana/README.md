@@ -1,4 +1,4 @@
-# kibana-log plugin
+# kibana skill
 
 Claude Code plugin for constructing and opening Kibana Discover log search URLs from natural language queries. Index UUID is auto-discovered via Kibana API — no need to hardcode UUIDs.
 
@@ -8,7 +8,7 @@ Claude Code plugin for constructing and opening Kibana Discover log search URLs 
 export KIBANA_LOG_SKILL_HOME="$HOME/.agentic-house/kibana-log"
 
 # Copy sample config and edit
-cp -r /path/to/skills/kibana-log/config-sample/* "$KIBANA_LOG_SKILL_HOME/"
+cp -r /path/to/skills/kibana/config-sample/* "$KIBANA_LOG_SKILL_HOME/"
 
 # Edit each file with your actual values
 # 1. index.json  — environments, fields, defaults (usually no change needed)

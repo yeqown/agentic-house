@@ -1,4 +1,4 @@
-# jenkins-skill plugin
+# jenkins skill
 
 Claude Code plugin for triggering and diagnosing Jenkins builds for repositories hosted on `git.example.com`.
 
@@ -20,10 +20,10 @@ Example:
 RUNTIME_ROOT="${JENKINS_SKILL_HOME:-$HOME/.agentic-house/jenkins-skill}"
 mkdir -p "$RUNTIME_ROOT"
 cp /path/to/jenkins-cli.jar "$RUNTIME_ROOT/jenkins-cli.jar"
-cp skills/jenkins-skill/config-sample/index.json "$RUNTIME_ROOT/index.json"
+cp skills/jenkins/config-sample/index.json "$RUNTIME_ROOT/index.json"
 ```
 
-`skills/jenkins-skill/config-sample/index.json` is sample runtime config. Copy it first, then set Jenkins `host`, `auth`, and parameter definitions for your team.
+`skills/jenkins/config-sample/index.json` is sample runtime config. Copy it first, then set Jenkins `host`, `auth`, and parameter definitions for your team.
 
 Helper CLI entrypoint:
 - `bin/jenkins-skill context`

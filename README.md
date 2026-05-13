@@ -1,8 +1,6 @@
 # Agentic House Skills
 
-A collection of self-contained Claude skills modeled after the structure of `anthropics/skills`.
-
-This repository is a pure skills repository. It is not a Claude Code plugin marketplace package.
+A collection of self-contained Claude skills with Claude Code marketplace metadata.
 
 ## Layout
 
@@ -21,18 +19,24 @@ Only `SKILL.md` is required. Other files are included when the skill needs human
 
 | Skill | Purpose |
 | --- | --- |
-| `jenkins-skill` | Trigger, monitor, and diagnose Jenkins builds using repository context and Jenkins parameter metadata. |
-| `kibana-log` | Load Kibana index context and generate Discover links for application log investigation. |
+| `jenkins` | Trigger, monitor, and diagnose Jenkins builds using repository context and Jenkins parameter metadata. |
+| `kibana` | Load Kibana index context and generate Discover links for application log investigation. |
 
-## Use a Skill
+## Install or Update Skills
 
-Copy the skill directory you need:
+Add this repository as a Claude Code plugin marketplace:
 
-```bash
-cp -R skills/<skill-name> /path/to/your/skills/
+```text
+/plugin marketplace add yeqown/agentic-house
 ```
 
-Then load it using the skill mechanism supported by your Claude environment.
+Then install or update skills from the marketplace through Claude Code's plugin UI.
+
+For the upstream Anthropic skills marketplace, use:
+
+```text
+/plugin marketplace add anthropics/skills
+```
 
 ## Create a Skill
 

@@ -10,7 +10,7 @@ $HOME/.agentic-house/kibana-log/
 └── pre.json          # 预发环境（可选）
 ```
 
-Sample config: `skills/kibana-log/config-sample/`
+Sample config: `skills/kibana/config-sample/`
 
 ## index.json
 

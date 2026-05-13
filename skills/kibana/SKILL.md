@@ -1,5 +1,5 @@
 ---
-name: kibana-log
+name: kibana
 description: Use when the user wants to search or view application logs in Kibana using natural language, e.g. "查看测试环境用户平台 user-svc 的日志" or "搜索最近 2 小时 gateway-svc 日志中包含 keyword 的日志".
 ---
 
@@ -30,7 +30,7 @@ Required local configuration:
 - `load_kibana_context.py` — helper loader that emits one JSON context bundle for the model
 - local tools: `curl`, `jq`, `open` (macOS) or `xdg-open` (Linux)
 
-A sample config is provided at `skills/kibana-log/config-sample/`. Copy it to the runtime root and edit values.
+A sample config is provided at `skills/kibana/config-sample/`. Copy it to the runtime root and edit values.
 
 Optional user inputs:
 - keyword / search term

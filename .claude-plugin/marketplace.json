@@ -15,7 +15,7 @@
       "source": "./",
       "strict": false,
       "skills": [
-        "./skills/jenkins-skill"
+        "./skills/jenkins"
       ]
     },
     {
@@ -24,7 +24,7 @@
       "source": "./",
       "strict": false,
       "skills": [
-        "./skills/kibana-log"
+        "./skills/kibana"
       ]
     }
   ]

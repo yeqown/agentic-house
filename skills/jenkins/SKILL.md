@@ -1,5 +1,5 @@
 ---
-name: jenkins-skill
+name: jenkins
 description: Use when the user wants to trigger, monitor, or diagnose a Jenkins build or deploy for the current repository hosted on git.example.com.
 ---
 
