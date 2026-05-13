@@ -92,12 +92,13 @@ Sample config:
 
 ## Helper commands
 
-- `bin/jenkins-skill context` — derive git host, branch, project, and Jenkins job path.
-- `bin/jenkins-skill runtime` — validate runtime files and Jenkins host/auth configuration.
-- `bin/jenkins-skill metadata` — output context, runtime metadata, job path, host, and all Jenkins parameter definitions.
-- `bin/jenkins-skill trigger-command --param Name=value ...` — validate explicit parameter names and output Jenkins CLI argv.
-- `bin/jenkins-skill last-build` — read latest Jenkins build metadata.
-- `bin/jenkins-skill console-log [--build-number N] [--tail 80]` — read console log text.
+Run all helper commands from the current project root.
+
+- `./skills/jenkins/scripts/helper.py metadata` — derive git context, validate runtime configuration, and return merged Jenkins parameter metadata.
+- `./skills/jenkins/scripts/helper.py job-parameters` — read actual Jenkins job parameter definitions and candidate values.
+- `./skills/jenkins/scripts/helper.py trigger-command --param Name=value ...` — validate explicit parameter names and output Jenkins CLI argv.
+- `./skills/jenkins/scripts/helper.py last-build` — read latest Jenkins build metadata.
+- `./skills/jenkins/scripts/helper.py console-log [--build-number N] [--tail 80]` — read console log text.
 
 ## Parameter schema
 
@@ -112,7 +113,7 @@ Optional fields:
 
 ## Parameter interpretation
 
-`parameters` is metadata for LLM-driven build assembly. The helper returns it as-is through `bin/jenkins-skill metadata`.
+`parameters` is metadata for LLM-driven build assembly. `./skills/jenkins/scripts/helper.py metadata` is the unified preflight command and returns the merged git/runtime/parameter payload.
 
 | Field | Rule |
 | --- | --- |

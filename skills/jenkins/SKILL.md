@@ -7,7 +7,7 @@ description: Use when the user wants to trigger, monitor, or diagnose a Jenkins 
 
 ## Overview
 
-Natural-language Jenkins workflow for repos on `git.example.com`. Use helper CLI output for deterministic git/runtime/Jenkins metadata. The LLM must map user build intent to Jenkins parameters from the parameter definitions returned by `bin/jenkins-skill metadata`; helper code must not hardcode business parameter names or meanings.
+Natural-language Jenkins workflow for repos on `git.example.com`. Use helper CLI output for deterministic git/runtime/Jenkins metadata. The LLM must map user build intent to Jenkins parameters from the parameter definitions returned by `./skills/jenkins/scripts/helper.py metadata`; helper code must not hardcode business parameter names or meanings.
 
 ## When to Use
 
@@ -21,7 +21,7 @@ Do not use when the current repo is not on `git.example.com`.
 ## Inputs
 
 Required runtime context:
-- current directory is a git repo
+- current directory is the git project root
 - `origin` remote exists
 - current branch exists
 - remote host is `git.example.com`
@@ -30,7 +30,7 @@ Required local configuration:
 - runtime root = `JENKINS_SKILL_HOME` when set; otherwise default to `$HOME/.agentic-house/jenkins-skill`
 - `${runtime root}/jenkins-cli.jar`
 - `${runtime root}/index.json`
-- helper entrypoint: `bin/jenkins-skill`
+- helper entrypoint: `./skills/jenkins/scripts/helper.py metadata`
 - local tools: `git`, `java`, `curl`, `python3`
 
 Optional user inputs:
@@ -44,20 +44,20 @@ For viewing or diagnosing builds, prefer the helper CLI commands below. They han
 
 ### View latest build
 
-1. Run `bin/jenkins-skill last-build` — single call, outputs structured JSON.
+1. Run `./skills/jenkins/scripts/helper.py last-build` — single call, outputs structured JSON.
 2. On success, format the result for the user:
    - build number, result, branch/current parameters, builder, duration, URL.
 3. On error (missing config, auth failure, no builds), relay the error message.
 
 ### View console log (for failure diagnosis)
 
-1. Run `bin/jenkins-skill console-log [--build-number N] [--tail 80]` — single call.
+1. Run `./skills/jenkins/scripts/helper.py console-log [--build-number N] [--tail 80]` — single call.
 2. `--build-number` defaults to the last build if omitted.
 3. Use the returned `log` field to classify the failure.
 
 ### View actual Jenkins job parameters
 
-1. Run `bin/jenkins-skill job-parameters` when local metadata may be stale, incomplete, or missing real candidate values.
+1. Run `./skills/jenkins/scripts/helper.py job-parameters` when local metadata may be stale, incomplete, or missing real candidate values.
 2. Treat returned `parameters` as Jenkins truth for names, defaults, and `availableValues`.
 3. If the command succeeds, prefer Jenkins values over `metadata.parameters` for any conflicting field.
 
@@ -67,32 +67,29 @@ After `last-build`, compare its `parameters` against the current git branch. If 
 
 ## Trigger Workflow (build/deploy)
 
-1. Run `bin/jenkins-skill context` to verify git repo state and derive git host, branch, and Jenkins job path.
-2. If helper output says the remote host is unsupported or the remote URL cannot be parsed, refuse and explain why.
-3. Run `bin/jenkins-skill runtime` to resolve runtime root and required files.
-4. If helper output shows missing runtime files, stop and tell the user which path is missing.
-5. Run `bin/jenkins-skill metadata` to load branch, job path, Jenkins host, runtime root, and complete `parameters` definitions.
-6. Read every parameter definition before deciding build parameters. Use `name`, `description`, `required`, `default`, and `availableValues` to infer values from user intent.
-7. If `metadata.parameters` appears stale, incomplete, or conflicts with Jenkins behavior, run `bin/jenkins-skill job-parameters` and treat its result as source of truth.
-8. If the user asks for “all”, “all services”, “full rollout”, or similar intent and `metadata.parameters` does not provide complete candidate values, run `bin/jenkins-skill job-parameters` to fetch the actual Jenkins choice list before expanding values.
-9. Do not use parameter names or business meanings that are not present in metadata or Jenkins job definitions.
-10. For required parameters with no clear value or default, ask the user to choose or provide a value.
-11. For ambiguous user intent, ask one focused question instead of guessing.
-12. Build explicit `name=value` pairs only after all required values are known.
-13. Run `bin/jenkins-skill trigger-command --param Name=value ...` to generate the Jenkins CLI argv and validate parameter names.
-14. Present job path, final parameters, and full Jenkins CLI command to the user.
-15. Trigger the Jenkins build with the generated Jenkins CLI command only after explicit user confirmation.
-16. Use the authenticated Jenkins JSON API for polling here because no helper command currently triggers or monitors newly queued builds.
-17. Poll the job JSON API until `lastBuild.number` increases.
-18. Treat that new build number as the triggered build.
-19. Poll the build API every 10–15 seconds until terminal state.
-20. On failure, run `bin/jenkins-skill console-log --build-number <triggered build number>` to fetch console tail and classify the failure.
+1. Run `./skills/jenkins/scripts/helper.py metadata` first to verify git repo state, resolve runtime configuration, derive job path, and load parameter definitions.
+2. If helper output says the remote host is unsupported, the remote URL cannot be parsed, or runtime config/files are invalid, stop and explain the returned error.
+3. Read every parameter definition before deciding build parameters. Use `name`, `description`, `required`, `default`, and `availableValues` to infer values from user intent.
+4. If `metadata.parameters` appears stale, incomplete, or conflicts with Jenkins behavior, run `./skills/jenkins/scripts/helper.py job-parameters` and treat its result as source of truth.
+5. If the user asks for “all”, “all services”, “full rollout”, or similar intent and `metadata.parameters` does not provide complete candidate values, run `./skills/jenkins/scripts/helper.py job-parameters` to fetch the actual Jenkins choice list before expanding values.
+6. Do not use parameter names or business meanings that are not present in metadata or Jenkins job definitions.
+7. For required parameters with no clear value or default, ask the user to choose or provide a value.
+8. For ambiguous user intent, ask one focused question instead of guessing.
+9. Build explicit `name=value` pairs only after all required values are known.
+10. Run `./skills/jenkins/scripts/helper.py trigger-command --param Name=value ...` to generate the Jenkins CLI argv and validate parameter names.
+11. Present job path, final parameters, and full Jenkins CLI command to the user.
+12. Trigger the Jenkins build with the generated Jenkins CLI command only after explicit user confirmation.
+13. Use the authenticated Jenkins JSON API for polling here because no helper command currently triggers or monitors newly queued builds.
+14. Poll the job JSON API until `lastBuild.number` increases.
+15. Treat that new build number as the triggered build.
+16. Poll the build API every 10–15 seconds until terminal state.
+17. On failure, run `./skills/jenkins/scripts/helper.py console-log --build-number <triggered build number>` to fetch console tail and classify the failure.
 
 ## Parameter Rules
 
-The parameter definitions returned by `bin/jenkins-skill metadata` are the default starting point.
+The parameter definitions returned by `./skills/jenkins/scripts/helper.py metadata` are the default starting point.
 
-`metadata.parameters` is local guidance, not guaranteed Jenkins truth. When Jenkins job definitions disagree with local metadata or local metadata lacks enough candidate values to satisfy user intent, run `bin/jenkins-skill job-parameters` and prefer its returned fields for `name`, `default`, and `availableValues`.
+`metadata.parameters` is local guidance, not guaranteed Jenkins truth. When Jenkins job definitions disagree with local metadata or local metadata lacks enough candidate values to satisfy user intent, run `./skills/jenkins/scripts/helper.py job-parameters` and prefer its returned fields for `name`, `default`, and `availableValues`.
 
 For each parameter:
 - `name` is the exact Jenkins parameter key.

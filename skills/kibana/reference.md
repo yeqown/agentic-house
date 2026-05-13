@@ -43,7 +43,7 @@ Sample config: `skills/kibana/config-sample/`
 
 收集 `fields` 中 `displayDefault: true` 的条目，按定义顺序取 `fieldName` 组成 columns。
 
-## \<env-key\>.json
+## <env-key>.json
 
 ```json
 {
@@ -64,57 +64,101 @@ curl -s '${HOST}/api/saved_objects/_find?fields=title&fields=type&fields=typeMet
 
 Response → `saved_objects[].{ id, attributes.title }`. 匹配 title (去掉 `*`) → 拿 `id` 作 UUID。
 
-## 字段验证
-
-```bash
-curl -s '${HOST}/api/index_patterns/_fields_for_wildcard?pattern=${NAME}*&meta_fields=_source&meta_fields=_id&meta_fields=_type&meta_fields=_index&meta_fields=_score' \
-  -H 'kbn-version: 7.17.12' \
-  -H 'content-type: application/json'
-```
-
-## 解析链
+## 两段式流程
 
 ```
-用户: "查看测试环境用户平台 user-svc 日志"
-  → 先跑 load_kibana_context.py
-  → 一次返回 env/host/indices/fields/service/timeRange/urlSkeleton
-  → 若缺字段，基于 candidates 走选择题
-  → 调 API 1 → 匹配 title "example-portal*" → UUID
-  → 替换 urlSkeleton 中 __INDEX_UUID__ → 最终 URL
+用户: "查看测试环境 game-openapi 最近 1h 的 error 或 warn 日志"
+  → 先在技能目录跑 python3 scripts/load_kibana_context.py context
+  → 返回 env/host/fields/defaultTimeRange/indexName->uuid mapping
+  → LLM 用 原始请求 + context JSON 解析 Discover state
+  → 若缺必要字段，用 context 里的选项问用户
+  → 在技能目录跑 python3 scripts/load_kibana_context.py build-url --payload-json '<json>'
+  → 最终 URL 直接使用 UUID
   → 输出 URL，再让用户选择是否打开
 ```
 
-## Environment mapping
+## `context` mode
 
-| 用户输入 | Key |
-|---|---|
-| 测试 / 测试环境 / test / staging | `test` |
-| 生产 / 线上 / prod / production | `prod` |
-| 预发 / pre / preprod | `pre` |
+```bash
+python3 scripts/load_kibana_context.py context
+python3 scripts/load_kibana_context.py context --env test
+```
 
-## Time range
+返回重点：
+- environments
+- fields
+- defaultTimeRange
+- per-env host
+- per-env `indices` mapping (`indexName -> uuid`)
 
-| 用户输入 | from | to |
-|---|---|---|
-| 最近 2 小时 / last 2h | `now-2h` | `now` |
-| 最近 30 分钟 / last 30m | `now-30m` | `now` |
-| 今天 / today | `now/d` | `now` |
-| 昨天 / yesterday | `now-1d/d` | `now/d` |
-| 默认 (defaultTimeRange) | `now-${defaultTimeRange}` | `now` |
+## LLM 参数解析职责
 
-## Log level
+LLM 负责从原始自然语言里解析：
+- `environment`
+- `indexName`
+- `indexUuid`
+- `globalState`
+- `appState.columns`
+- `appState.sort`
+- `appState.filters`
+- `appState.query`
 
-| 用户输入 | Filter 值 |
-|---|---|
-| ERROR / 错误 | `ERROR` |
-| WARN / 警告 | `WARN` |
-| INFO / 信息 | `INFO` |
-| DEBUG / 调试 | `DEBUG` |
+脚本不再解析自然语言，也不再预设 service / log-level / namespace / keyword 这些语义字段。
+
+## `build-url` mode
+
+```bash
+python3 scripts/load_kibana_context.py build-url \
+  --payload-json '{
+    "host": "https://kibana.example.com",
+    "indexName": "game-openapi",
+    "indexUuid": "ef7b2550-d30f-11ef-9c9f-07d9d86326f2",
+    "globalState": {
+      "time": {"from": "now-1h", "to": "now"}
+    },
+    "appState": {
+      "query": {
+        "language": "kuery",
+        "query": "message.level:\"error\" OR message.level:\"warn\""
+      }
+    }
+  }'
+```
+
+必填 payload 字段：
+- `host`
+- `indexUuid`
+- `globalState.time.from`
+- `globalState.time.to`
+
+可选 payload 字段：
+- `indexName`
+- `globalState.refreshInterval`
+- `globalState.filters`
+- `appState.columns`
+- `appState.sort`
+- `appState.filters`
+- `appState.query`
+- `appState.interval`
+
+## Discover URL state model
+
+`_g`:
+- `time`
+- `refreshInterval`
+- global `filters`
+
+`_a`:
+- `index`
+- `columns`
+- `sort`
+- app `filters`
+- `query`
 
 ## URL template
 
 ```
-${HOST}/app/discover#/?_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:'${FROM}',to:'${TO}'))&_a=(columns:!(${COLUMNS}),filters:${FILTERS_JSON},index:'${INDEX_UUID}',interval:auto,query:(language:kuery,query:'${QUERY}'),sort:!(!('${TIMESTAMP}',desc)))
+${HOST}/app/discover#/?_g=${RISON_GLOBAL_STATE}&_a=${RISON_APP_STATE}
 ```
 
 ## Filter template
@@ -123,29 +167,17 @@ ${HOST}/app/discover#/?_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(
 {
   "$state": { "store": "appState" },
   "meta": {
-    "alias": null, "disabled": false,
-    "index": "${INDEX_UUID}", "key": "${FIELD}",
-    "negate": false, "params": { "query": "${VALUE}" },
+    "alias": null,
+    "disabled": false,
+    "index": "${INDEX_UUID}",
+    "key": "${FIELD}",
+    "negate": false,
+    "params": { "query": "${VALUE}" },
     "type": "phrase"
   },
   "query": { "match_phrase": { "${FIELD}": "${VALUE}" } }
 }
 ```
 
-## Example inputs
-
-### "查看测试环境用户平台 user-svc 的日志"
-- env: `test`, unit: `用户平台` → `example-portal`
-- API fetch UUID, service: `user-svc`
-- columns: `message.level,message.msg,kubernetes.container_name`
-- time: `now-1h` to `now`
-
-### "搜索最近 2 小时，用户平台 gateway-svc 日志中包含 keyword 的日志"
-- env: `test`, unit: `用户平台` → `example-portal`
-- service: `gateway-svc`, keyword: `keyword`
-- time: `now-2h` to `now`
-
-### "查看线上 ERROR 级别 order-svc 日志"
-- env: `prod`, unit: (must specify) → match description
-- service: `order-svc`, log level: `ERROR`
-- time: `now-1h` to `now`
+`filters` 适合 exact/range/exists 等结构化约束。
+`appState.query.query` 适合 OR / AND / 括号 / 文本搜索等 KQL 逻辑。

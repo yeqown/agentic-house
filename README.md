@@ -32,10 +32,11 @@ Add this repository as a Claude Code plugin marketplace:
 
 Then install or update skills from the marketplace through Claude Code's plugin UI.
 
-For the upstream Anthropic skills marketplace, use:
-
 ```text
-/plugin marketplace add anthropics/skills
+# update
+/plugin marketplace update yeqown/agentic-house
+
+# install skill
 ```
 
 ## Create a Skill

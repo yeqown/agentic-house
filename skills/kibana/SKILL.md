@@ -7,7 +7,7 @@ description: Use when the user wants to search or view application logs in Kiban
 
 ## Overview
 
-Natural-language Kibana log search. Parse user intent into structured query parameters, discover index UUID via Kibana API, construct a Kibana Discover URL, and open it in the browser.
+Natural-language Kibana log search. Use script-provided Kibana context plus the user's raw request to let the LLM parse Discover state, then construct a Kibana Discover URL with the resolved index UUID and optionally open it in the browser.
 
 ## When to Use
 
@@ -21,22 +21,22 @@ Do not use when the user wants to tail local log files or query a database direc
 ## Inputs
 
 Required runtime context:
-- user provides at minimum: environment, business unit (or index), and service name
+- user provides a natural-language request describing desired environment, index/business unit, time range, filters, or search logic
 
 Required local configuration:
 - runtime root = `KIBANA_LOG_SKILL_HOME` when set; otherwise default to `$HOME/.agentic-house/kibana-log`
 - `${runtime root}/index.json` — common config (environments, fields, defaults)
 - `${runtime root}/<env-key>.json` — per-environment config (host, indices)
-- `load_kibana_context.py` — helper loader that emits one JSON context bundle for the model
-- local tools: `curl`, `jq`, `open` (macOS) or `xdg-open` (Linux)
+- helper script = `scripts/load_kibana_context.py`
+- local tools: `python3`, `open` (macOS) or `xdg-open` (Linux)
 
 A sample config is provided at `skills/kibana/config-sample/`. Copy it to the runtime root and edit values.
 
 Optional user inputs:
-- keyword / search term
+- KQL query text
 - time range (e.g. "最近 2 小时", "last 1h", "今天")
-- namespace or pod name
-- log level (ERROR, WARN, INFO, DEBUG)
+- explicit filters
+- columns / sort
 
 ## Config Structure
 
@@ -83,7 +83,7 @@ Two-layer config: one common file + one file per environment.
   - `displayDefault` — `true` 表示默认展示为 Kibana Discover 列，`false` 或缺省不展示
 - `defaultTimeRange` — 默认时间范围，如 `1h`, `30m`, `2h`
 
-### \<env-key\>.json — 环境配置
+### <env-key>.json — 环境配置
 
 ```json
 {
@@ -122,50 +122,27 @@ Response:
 
 Use `id` as UUID, `attributes.title` (strip trailing `*`) as index name.
 
-**LLM workflow**: run this command, parse JSON, match index name from config to `title` field, extract `id` as UUID.
-
-### API 2: List fields in an index
-
-```bash
-curl -s '${HOST}/api/index_patterns/_fields_for_wildcard?pattern=${INDEX_NAME}*&meta_fields=_source&meta_fields=_id&meta_fields=_type&meta_fields=_index&meta_fields=_score' \
-  -H 'kbn-version: 7.17.12' \
-  -H 'content-type: application/json'
-```
-
-Response:
-```json
-{
-  "fields": {
-    "kubernetes.container_name": { "type": "string", "searchable": true },
-    "message.level": { "type": "string" },
-    "message.msg": { "type": "string" }
-  }
-}
-```
-
-Use to validate that configured field names exist in the index.
-
-## Parameter Extraction Rules
-
-| Field | Extraction Rule | Default |
-| --- | --- | --- |
-| `environment` | 测试/测试环境/test/staging = `test`; 生产/线上/prod/production = `prod`; 预发/pre/preprod = `pre` | required |
-| `businessUnit` | Match against `indices` keys and values in `<env-key>.json` | required |
-| `service` | Application / container name (filter on `fields[].fieldName` where entry matches container) | required |
-| `keyword` | Phrases after 包含/关键词/search/keyword | empty |
-| `timeRange` | 最近N小时→`now-Nh`, 最近N分钟→`now-Nm`, 今天→`now/d` | `now-${defaultTimeRange}` to `now` |
-| `namespace` | Match after namespace/命名空间 | omit |
-| `logLevel` | ERROR/错误, WARN/警告, INFO/信息, DEBUG/调试 | omit |
-
 ## URL Construction
 
 ### Base URL format
 
 ```
-${HOST}/app/discover#/
-  ?_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:'${FROM}',to:'${TO}'))
-  &_a=(columns:!(${COLUMNS}),filters:${FILTERS_JSON},index:'${INDEX_UUID}',interval:auto,query:(language:kuery,query:'${QUERY}'),sort:!(!('${TIMESTAMP}',desc)))
+${HOST}/app/discover#/?_g=${RISON_GLOBAL_STATE}&_a=${RISON_APP_STATE}
 ```
+
+### Discover state model
+
+`_g`:
+- `time`
+- `refreshInterval`
+- global `filters`
+
+`_a`:
+- `index`
+- `columns`
+- `sort`
+- app `filters`
+- `query`
 
 ### Columns
 
@@ -193,67 +170,68 @@ Each filter in the `filters` array:
 
 `meta.index` must be the same UUID as the top-level `index` param.
 
-### Filter field mapping
+### Query vs filters
 
-- service → `fields[].fieldName` where description matches container (e.g. `kubernetes.container_name`)
-- log level → `fields[].fieldName` where description matches log level (e.g. `message.level`)
-
-Keyword goes into `query` field as KQL: `${message field fieldName}:"${KEYWORD}"` or `*` if empty.
+- `filters` 适合 exact/range/exists 等结构化约束
+- `appState.query.query` 适合 OR / AND / 括号 / 文本搜索等 KQL 逻辑
 
 ## Core Workflow
 
 ### Standard log search flow
 
-1. Read the user's natural language request.
-2. Run `load_kibana_context.py` first. It should resolve runtime root, load config, parse intent, prepare candidates, and build `urlSkeleton` with `__INDEX_UUID__` placeholder in one shot.
+1. Read the user's natural-language request.
+2. Run `python3 scripts/load_kibana_context.py context` from the skill directory first. It should resolve runtime root, load config, fetch live Kibana index metadata, and return environment info plus matched `indexName -> uuid` mappings.
 3. Read the returned JSON.
-4. If environment is missing or ambiguous, present environment options from `candidates.environment` using `AskUserQuestion` instead of free-form input.
-5. If business unit / index is missing or ambiguous, present `candidates.indexName` using `AskUserQuestion` instead of free-form input.
-6. If service name is missing or ambiguous, ask with `AskUserQuestion` whenever `candidates.service` or other clear options are available. Prefer choice-based interaction over free-form input whenever possible.
-7. After user fills missing values, re-run `load_kibana_context.py` with override flags such as `--env`, `--index`, `--service`.
-8. **Fetch UUID from API**: run curl command (API 1) against the resolved Kibana host.
-9. Parse response, match resolved index name against `saved_objects[].attributes.title` (strip trailing `*`).
-10. Extract `id` as UUID. If no match found, stop and list available indices to the user.
-11. **Optional field validation**: run API 2, check that configured field names exist in the index. Warn if missing.
-12. Replace `__INDEX_UUID__` inside `urlSkeleton` with the resolved UUID to produce the final URL.
-13. Report the extracted parameters and final URL so the user can copy/paste.
-14. Ask the user whether to open the URL.
-15. Only after explicit approval, open the URL with `open` (macOS) or `xdg-open` (Linux). If open fails, say so clearly and still return the URL.
+4. Combine the raw user request with the context JSON and let the LLM parse these Discover state pieces:
+   - `environment`
+   - `indexName`
+   - `indexUuid`
+   - `globalState`
+   - `appState.columns`
+   - `appState.sort`
+   - `appState.filters`
+   - `appState.query`
+5. If environment is missing or ambiguous, present options from the `environments` payload using `AskUserQuestion` instead of free-form input.
+6. If business unit / index is missing or ambiguous, present options from the selected environment's configured indices using `AskUserQuestion` instead of free-form input.
+7. If required state parts are missing, ask the user directly. Prefer choice-based interaction whenever the context payload provides clear options.
+8. When required parameters are complete, run `python3 scripts/load_kibana_context.py build-url --payload-json '<json>'` from the skill directory with the resolved UUID.
+9. Report the extracted parameters and final URL so the user can copy/paste.
+10. Ask the user whether to open the URL.
+11. Only after explicit approval, open the URL with `open` (macOS) or `xdg-open` (Linux). If open fails, say so clearly and still return the URL.
 
 ### Discovery-only flow (user asks to list indices)
 
-1. Read environment from user input.
-2. Load `index.json` and `<env-key>.json`.
-3. Run API 1, list all index patterns.
-4. Present the list (name + UUID) to the user.
-5. Optionally call API 2 for a specific index if user asks about fields.
+1. Run `python3 scripts/load_kibana_context.py context` from the skill directory.
+2. Read the returned environments and per-env `indices` mapping.
+3. Present the list (`indexName -> UUID`) to the user.
+4. If the user only wants one environment, prefer `context --env <env>`.
 
 ## Failure Handling
 
 Stop and ask the user instead of guessing when:
 
 - environment cannot be determined from the input and there are no clear configured options to present
-- business unit cannot be matched to any index
-- service name cannot be determined from the input and there are no clear candidate choices to present
+- business unit cannot be matched to any configured index
 - `KIBANA_LOG_SKILL_HOME` (or fallback) is unavailable
-- `index.json` is missing or has no `environments` key
-- `<env-key>.json` is missing for the resolved environment
-- API 1 returns no match for the index name
+- `index.json` is missing or has no valid `environments` key
+- `<env-key>.json` is missing for the requested environment
+- Kibana API returns no match for the selected index name
 - Kibana API returns 401/403 or other auth-related failure
 - Kibana host is empty or malformed
-- time range cannot be parsed
+- time range cannot be parsed by the LLM into explicit `from` / `to` values
+- `build-url` payload is missing `host`, `indexUuid`, `globalState.time.from`, or `globalState.time.to`
 
 Never guess values that are not defined by this skill.
 
 ## Outputs
 
 On success, include:
-- extracted parameters (env, business unit, index name, index UUID, service, keyword, time range)
+- extracted parameters (env, index name, index UUID, time range, filters, query)
 - resolved Kibana host
 - full Kibana Discover URL
 - whether the URL was opened automatically
 
 On failure, include:
 - which parameter is missing or ambiguous
-- available indices (if API was called)
+- available environment or index options
 - suggested fix

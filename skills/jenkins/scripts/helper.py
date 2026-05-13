@@ -34,6 +34,23 @@ def git_output(*args: str) -> str:
     return result.stdout.strip()
 
 
+def project_root_error() -> dict | None:
+    repo_root = git_output("rev-parse", "--show-toplevel")
+    if not repo_root:
+        return {"ok": False, "error": "current directory is not a git repo root"}
+
+    cwd = Path.cwd().resolve()
+    root = Path(repo_root).resolve()
+    if cwd != root:
+        return {
+            "ok": False,
+            "error": f"run helper from project root: {root}",
+            "cwd": str(cwd),
+            "projectRoot": str(root),
+        }
+    return None
+
+
 def load_config(root: Path) -> dict:
     config_path = root / "index.json"
     return json.loads(config_path.read_text(encoding="utf-8"))
@@ -59,6 +76,9 @@ _REMOTE_PATTERNS = [
 
 
 def _resolve_context() -> dict:
+    root_error = project_root_error()
+    if root_error:
+        return root_error
     if git_output("rev-parse", "--is-inside-work-tree") != "true":
         return {"ok": False, "error": "current directory is not a git repo"}
 
@@ -89,6 +109,9 @@ def _resolve_context() -> dict:
 
 
 def _resolve_runtime_config() -> dict:
+    root_error = project_root_error()
+    if root_error:
+        return root_error
     root = runtime_root()
     config_path = root / "index.json"
     if not config_path.exists():
@@ -243,43 +266,6 @@ def _extract_job_parameters(data: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
-
-
-def command_context(_: argparse.Namespace) -> int:
-    ctx = _resolve_context()
-    return emit(ctx, 0 if ctx.get("ok") else 1)
-
-
-def command_runtime(_: argparse.Namespace) -> int:
-    root = runtime_root()
-    files = {
-        "cliJar": root / "jenkins-cli.jar",
-        "config": root / "index.json",
-    }
-    missing = [name for name, path in files.items() if not path.exists()]
-    missing_config_fields: list[str] = []
-    payload = {
-        "ok": False,
-        "runtimeRoot": str(root),
-        "files": {name: str(path) for name, path in files.items()},
-        "missing": missing,
-    }
-    if files["config"].exists():
-        config, error = try_load_config(root)
-        if error:
-            payload["error"] = error
-        else:
-            host = str(config.get("host", "")).strip()
-            auth = str(config.get("auth", "")).strip()
-            if not host:
-                missing_config_fields.append("host")
-            if not auth:
-                missing_config_fields.append("auth")
-            payload["host"] = host
-            payload["authConfigured"] = bool(auth)
-    payload["missingConfigFields"] = missing_config_fields
-    payload["ok"] = not missing and not missing_config_fields and "error" not in payload
-    return emit(payload, 0 if payload["ok"] else 1)
 
 
 def command_metadata(_: argparse.Namespace) -> int:
@@ -464,12 +450,6 @@ def command_console_log(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="jenkins-skill")
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    context_parser = subparsers.add_parser("context")
-    context_parser.set_defaults(handler=command_context)
-
-    runtime_parser = subparsers.add_parser("runtime")
-    runtime_parser.set_defaults(handler=command_runtime)
 
     metadata_parser = subparsers.add_parser("metadata")
     metadata_parser.set_defaults(handler=command_metadata)
