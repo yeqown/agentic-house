@@ -51,6 +51,16 @@ Sample config: `skills/kibana/config-sample/`
 
 Collect all `fields` entries where `displayDefault: true`, take `fieldName` values in definition order.
 
+## Helper command contracts
+
+All commands run from `skills/kibana` unless an absolute script path is used.
+
+| Pattern | Command | Contract |
+| --- | --- | --- |
+| Tool wrapper / preflight | `python3 scripts/load_kibana_context.py context [--env <env>]` | Return environments, host config, fields, default time range, and index UUID mapping |
+| Generator | `python3 scripts/load_kibana_context.py build-url --payload-json '<json>'` | Validate payload, Rison-encode Discover state, return final URL |
+| Reviewer | helper error JSON | Treat `ok: false` output as evidence for missing config, auth, host, index, or payload failures |
+
 ## Per-environment config (`<env-key>.json`)
 
 ```json
@@ -119,6 +129,8 @@ Optional payload fields: `indexName`, `globalState.refreshInterval`, `globalStat
 ${HOST}/app/discover#/?_g=${RISON_GLOBAL_STATE}&_a=${RISON_APP_STATE}
 ```
 
+Generator guardrail: the LLM may choose state fields from user intent and context, but `build-url` owns Rison syntax, URL escaping, and final URL assembly. After helper output, return the generated URL unchanged.
+
 ### `_g` (global state)
 
 - `time` — `{ "from": "now-1h", "to": "now" }`
@@ -157,3 +169,12 @@ ${HOST}/app/discover#/?_g=${RISON_GLOBAL_STATE}&_a=${RISON_APP_STATE}
 
 - `filters` — structured constraints: exact match, range, exists
 - `appState.query.query` — KQL logic: OR, AND, parentheses, text search
+
+## Log reviewer rubric
+
+| Severity | Evidence | Next action |
+| --- | --- | --- |
+| critical | fatal, panic, crash loop, data loss, startup failure, repeated 5xx from core path | Escalate with service, env, time range, first failing trace/request ID |
+| high | error with failed request/job, dependency outage, auth failure, timeout burst | Summarize affected operation and likely failing dependency |
+| medium | warning burst, retries, degraded dependency, slow query without hard failure | Suggest narrowing by trace ID, pod, endpoint, or dependency |
+| low | isolated warning/info noise with successful completion | Report as likely non-blocking and suggest broader time comparison |

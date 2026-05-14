@@ -67,3 +67,34 @@ class TriggerCommandTest(unittest.TestCase):
             "-p",
             "DeployMicroServices=api",
         ])
+
+    @mock.patch.object(MODULE, "_resolve_runtime_config")
+    @mock.patch.object(MODULE, "_resolve_metadata")
+    def test_trigger_command_rejects_parameters_not_in_preflight_metadata(
+        self,
+        resolve_metadata: mock.Mock,
+        resolve_runtime_config: mock.Mock,
+    ) -> None:
+        resolve_runtime_config.return_value = {
+            "ok": True,
+            "host": "https://jenkins.example.com/",
+            "auth": "bot:token",
+            "runtimeRoot": "/tmp/unused",
+        }
+
+        exit_code, payload = self.run_main([
+            "trigger-command",
+            "--job-path",
+            "team/project",
+            "--available-param",
+            "GitBranch",
+            "--param",
+            "Unknown=value",
+        ])
+
+        self.assertEqual(exit_code, 1)
+        resolve_metadata.assert_not_called()
+        resolve_runtime_config.assert_not_called()
+        self.assertEqual(payload["error"], "unknown Jenkins parameter")
+        self.assertEqual(payload["parameter"], "Unknown")
+        self.assertEqual(payload["availableParameters"], ["GitBranch"])

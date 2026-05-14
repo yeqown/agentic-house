@@ -90,17 +90,17 @@ Sample: `skills/jenkins/config-sample/index.json`
 | `host` | Jenkins base URL, e.g. `https://jenkins.example.net/` |
 | `auth` | `username:api-token` format |
 
-## Helper commands
+## Helper command contracts
 
 All commands run from current project root.
 
-| Command | Description |
-| --- | --- |
-| `./skills/jenkins/scripts/helper.py metadata` | Derive git context, validate runtime config, return merged parameter metadata |
-| `./skills/jenkins/scripts/helper.py job-parameters` | Read actual Jenkins job parameter definitions and candidate values |
-| `./skills/jenkins/scripts/helper.py trigger-command --job-path <path> --available-param <name> ... --param Name=value ...` | Validate parameter names from preflight metadata, output Jenkins CLI argv |
-| `./skills/jenkins/scripts/helper.py last-build` | Read latest build metadata |
-| `./skills/jenkins/scripts/helper.py console-log [--build-number N] [--tail 80]` | Read console log text |
+| Pattern | Command | Contract |
+| --- | --- | --- |
+| Tool wrapper / preflight | `./skills/jenkins/scripts/helper.py metadata` | Derive git context, validate runtime config, return `jobPath`, `branch`, `host`, `runtimeRoot`, and local `parameters` |
+| Tool wrapper / Jenkins truth | `./skills/jenkins/scripts/helper.py job-parameters` | Read actual Jenkins job parameter definitions and candidate values |
+| Generator | `./skills/jenkins/scripts/helper.py trigger-command --job-path <path> --available-param <name> ... --param Name=value ...` | Validate names against preflight-provided parameter names, then output Jenkins CLI `argv` |
+| Reviewer | `./skills/jenkins/scripts/helper.py last-build` | Read latest Jenkins build metadata |
+| Reviewer | `./skills/jenkins/scripts/helper.py console-log [--build-number N] [--tail 80]` | Read console log text used for failure classification |
 
 ## Parameter schema
 
@@ -118,6 +118,8 @@ Optional fields:
 `parameters` is metadata for LLM-driven build assembly. `helper.py metadata` is the unified preflight command returning merged git/runtime/parameter payload.
 
 `metadata.parameters` is local guidance, not guaranteed Jenkins truth. When Jenkins job definitions disagree with local metadata or local metadata lacks enough candidate values → run `job-parameters` and prefer its returned fields for `name`, `default`, and `availableValues`.
+
+Pipeline guardrail: `metadata` or `job-parameters` supplies the active parameter schema. `trigger-command` must receive `--job-path` and one `--available-param` per active parameter name from that schema; it must not re-run metadata to discover parameters.
 
 | Field | Rule |
 | --- | --- |

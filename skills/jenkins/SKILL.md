@@ -5,7 +5,15 @@ description: Trigger, monitor, or diagnose Jenkins builds and deploys for the cu
 
 # Jenkins Skill
 
-Natural-language Jenkins workflow for repos on `git.example.com`. Uses helper CLI for deterministic git/runtime/Jenkins metadata. LLM maps user build intent to Jenkins parameters from definitions returned by `helper.py metadata`.
+Natural-language Jenkins workflow for repos on `git.example.com`.
+
+## Pattern Contract
+
+- Tool wrapper: `./skills/jenkins/scripts/helper.py` owns git context, runtime config, Jenkins API reads, and Jenkins CLI argv construction.
+- Generator: `metadata`, `job-parameters`, and `trigger-command` generate structured JSON that the LLM must reuse, not re-create from memory.
+- Reviewer: `last-build` and `console-log` provide evidence for classifying failures.
+- Reversal interview: ask the user for missing required values, ambiguous choices, and trigger confirmation before shared Jenkins state changes.
+- Pipeline: follow workflow steps in order; do not skip, repeat, or reorder preflight, generation, confirmation, execution, or diagnosis.
 
 ## Runtime Setup
 
@@ -15,7 +23,7 @@ Natural-language Jenkins workflow for repos on `git.example.com`. Uses helper CL
 - Local tools: `git`, `java`, `curl`, `python3`
 - All helper commands run from project root
 
-Config schema, parameter rules, failure classification → [reference.md](reference.md)
+Config schema, helper contracts, parameter rules, failure classification → [reference.md](reference.md)
 
 ## When to Use
 
@@ -56,20 +64,17 @@ Use when local metadata may be stale, incomplete, or missing candidate values. T
 
 ## Trigger Workflow (build/deploy)
 
-1. Run `./skills/jenkins/scripts/helper.py metadata` — validates git repo, resolves config, derives job path, loads parameter definitions.
-2. If helper reports unsupported remote, unparseable URL, or invalid config → stop and explain error.
-3. Read every parameter definition. Use `name`, `description`, `required`, `default`, `availableValues` to infer values from user intent.
-4. If `metadata.parameters` appears stale or conflicts → run `job-parameters` and prefer its result.
-5. If user asks for "all"/"all services"/"full rollout" and metadata lacks complete candidate values → run `job-parameters` before expanding values.
-6. Do not use parameter names or meanings not present in metadata or Jenkins job definitions.
-7. For required parameters with no clear value/default → ask user to choose.
-8. For ambiguous intent → ask one focused question, not guess.
-9. Build explicit `name=value` pairs only after all required values are known.
-10. Run `./skills/jenkins/scripts/helper.py trigger-command --job-path <metadata.jobPath> --available-param <name> ... --param Name=value ...` to generate CLI argv. Pass one `--available-param` for each parameter name from the metadata source used above.
-11. Present job path, final parameters, and full CLI command to user.
-12. Trigger only after explicit user confirmation.
-13. Poll job JSON API until `lastBuild.number` increases, then track that build to terminal state.
-14. On failure → run `console-log --build-number <N>` to fetch log tail and classify.
+1. Preflight: run `./skills/jenkins/scripts/helper.py metadata` exactly once.
+2. Stop if metadata reports unsupported remote, unparseable URL, invalid config, missing runtime file, or empty parameter list.
+3. Read every returned parameter definition before deciding values: `name`, `description`, `required`, `default`, `availableValues`.
+4. If metadata appears stale or lacks candidate values needed for user intent, run `./skills/jenkins/scripts/helper.py job-parameters` once and use its `parameters` as the active parameter source.
+5. Reversal interview: ask one focused question for missing required values, ambiguous environment/service/action, or user intent that cannot be mapped from active parameters.
+6. Build explicit `name=value` pairs only from active parameter definitions.
+7. Generate command with `./skills/jenkins/scripts/helper.py trigger-command --job-path <jobPath> --available-param <name> ... --param Name=value ...`.
+8. Present job path, active parameter source (`metadata` or `job-parameters`), final parameters, and full CLI command.
+9. Reversal confirmation: trigger only after explicit user approval.
+10. After triggering, poll job JSON API until `lastBuild.number` increases, then track that build to terminal state.
+11. Reviewer path: on failure, run `./skills/jenkins/scripts/helper.py console-log --build-number <N>` and classify with the failure rubric.
 
 ## LLM Parameter Responsibilities
 
@@ -85,7 +90,7 @@ Do not hardcode rules for specific names like `OperatingEnvs`, `OperationType`, 
 
 Stop and ask user when: not a git repo, `origin` missing, remote host not `git.example.com`, URL cannot parse to `group/project`, branch empty, runtime files missing, Jenkins auth/job lookup fails, required parameters cannot be inferred, or `trigger-command` rejects a parameter name.
 
-Failure classification (infrastructure / business code error / other) → [reference.md](reference.md)
+Reviewer rubric → [reference.md](reference.md). Use fetched build metadata and console log evidence only; do not classify from status alone.
 
 ## Outputs
 

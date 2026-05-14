@@ -5,7 +5,15 @@ description: Search and view application logs in Kibana using natural language. 
 
 # Kibana Log Skill
 
-Natural-language Kibana log search. Uses a two-phase flow: load context (env/host/fields/index-UUID mapping), then let LLM parse Discover state and build a Kibana Discover URL.
+Natural-language Kibana log search using deterministic context loading and Discover URL generation.
+
+## Pattern Contract
+
+- Tool wrapper: `python3 scripts/load_kibana_context.py context` owns runtime config, environment metadata, field metadata, host lookup, and index UUID mapping.
+- Generator: `python3 scripts/load_kibana_context.py build-url --payload-json '<json>'` owns Rison encoding and final Discover URL construction.
+- Reviewer: fetched or user-provided logs are scored by severity only after evidence exists.
+- Reversal interview: ask the user for missing environment, index/service, time range, or ambiguous filters before URL generation.
+- Pipeline: follow workflow steps in order; do not skip, repeat, or reorder context loading, state generation, URL generation, confirmation, or open action.
 
 ## Runtime Setup
 
@@ -27,21 +35,15 @@ Optional: KQL query text, explicit filters, columns, sort.
 
 ### Standard log search
 
-1. Run `python3 scripts/load_kibana_context.py context` from skill directory.
-2. Read returned JSON — contains environments, fields, defaultTimeRange, per-env host, and `indexName -> uuid` mapping.
-3. Combine user request + context JSON, let LLM parse these Discover state pieces:
-   - `environment`, `indexName`, `indexUuid`
-   - `globalState` (time)
-   - `appState` (columns, sort, filters, query)
-4. If environment is missing/ambiguous → present options from `environments` payload via `AskUserQuestion`.
-5. If index is missing/ambiguous → present options from selected environment's `indices` via `AskUserQuestion`.
-6. When required parameters are complete, run:
-   ```bash
-   python3 scripts/load_kibana_context.py build-url --payload-json '<json>'
-   ```
-   See [reference.md](reference.md) for required/optional payload fields.
-7. Report extracted parameters and final URL.
-8. Ask user whether to open the URL. Only after explicit approval, open with `open`/`xdg-open`. If open fails, return URL anyway.
+1. Preflight: run `python3 scripts/load_kibana_context.py context` from skill directory exactly once.
+2. Stop if context reports missing runtime root, missing config, malformed host, auth failure, or empty environments.
+3. Read returned JSON before deciding values: `environments`, `fields`, `defaultTimeRange`, per-env host, and `indexName -> uuid` mapping.
+4. Reversal interview: ask one focused question when environment, index/service, time range, or query filters are missing or ambiguous.
+5. Generate Discover state JSON from user request plus context: `environment`, `indexName`, `indexUuid`, `globalState`, `appState`.
+6. Run `python3 scripts/load_kibana_context.py build-url --payload-json '<json>'`.
+7. Present extracted parameters, resolved host, query/filter summary, time range, and final URL.
+8. Reversal confirmation: open URL only after explicit user approval.
+9. Reviewer path: if user provides log output or asks for diagnosis, classify severity from evidence and list next action.
 
 ### Discovery-only (list indices)
 
@@ -60,7 +62,9 @@ State model and filter template → [reference.md](reference.md)
 
 Stop and ask the user when: environment or index cannot be determined, runtime root or config files are missing, Kibana API returns no match / auth failure / malformed host, time range cannot be parsed, or required `build-url` payload fields are missing.
 
-Never guess values not defined by this skill.
+Reviewer rubric → [reference.md](reference.md). Use actual log lines or helper errors as evidence; do not classify severity from query intent alone.
+
+Use only values defined by this skill.
 
 ## Outputs
 
