@@ -300,16 +300,12 @@ def command_job_parameters(_: argparse.Namespace) -> int:
 
 
 def command_trigger_command(args: argparse.Namespace) -> int:
-    metadata = _resolve_metadata()
-    if not metadata.get("ok"):
-        return emit(metadata, 1)
-
     try:
         parameters = _parse_param_values(args.param)
     except ValueError as e:
         return emit({"ok": False, "error": str(e)}, 1)
 
-    available_parameters = [parameter["name"] for parameter in metadata["parameters"]]
+    available_parameters = list(dict.fromkeys(args.available_param))
     available_parameter_names = set(available_parameters)
     for name in parameters:
         if name not in available_parameter_names:
@@ -323,30 +319,30 @@ def command_trigger_command(args: argparse.Namespace) -> int:
                 1,
             )
 
-    root = Path(metadata["runtimeRoot"])
-    jar_path = root / "jenkins-cli.jar"
-    if not jar_path.exists():
-        return emit({"ok": False, "error": "jenkins-cli.jar is missing", "path": str(jar_path)}, 1)
-
     rt = _resolve_runtime_config()
     if not rt.get("ok"):
         return emit(rt, 1)
+
+    root = Path(rt["runtimeRoot"])
+    jar_path = root / "jenkins-cli.jar"
+    if not jar_path.exists():
+        return emit({"ok": False, "error": "jenkins-cli.jar is missing", "path": str(jar_path)}, 1)
 
     argv = [
         "java",
         "-jar",
         str(jar_path),
         "-s",
-        metadata["host"],
+        rt["host"],
         "-auth",
         rt["auth"],
         "build",
-        metadata["jobPath"],
+        args.job_path,
     ]
     for name, value in parameters.items():
         argv.extend(["-p", f"{name}={value}"])
 
-    return emit({"ok": True, "jobPath": metadata["jobPath"], "parameters": parameters, "argv": argv})
+    return emit({"ok": True, "jobPath": args.job_path, "parameters": parameters, "argv": argv})
 
 
 def command_last_build(args: argparse.Namespace) -> int:
@@ -458,6 +454,8 @@ def build_parser() -> argparse.ArgumentParser:
     job_parameters_parser.set_defaults(handler=command_job_parameters)
 
     trigger_command_parser = subparsers.add_parser("trigger-command")
+    trigger_command_parser.add_argument("--job-path", required=True)
+    trigger_command_parser.add_argument("--available-param", action="append", default=[])
     trigger_command_parser.add_argument("--param", action="append", default=[])
     trigger_command_parser.set_defaults(handler=command_trigger_command)
 

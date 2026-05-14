@@ -60,12 +60,12 @@ Use when local metadata may be stale, incomplete, or missing candidate values. T
 2. If helper reports unsupported remote, unparseable URL, or invalid config → stop and explain error.
 3. Read every parameter definition. Use `name`, `description`, `required`, `default`, `availableValues` to infer values from user intent.
 4. If `metadata.parameters` appears stale or conflicts → run `job-parameters` and prefer its result.
-5. If user asks for "all"/"all services"/"full rollout" and metadata lacks complete candidate values → run `job-parameters` first.
+5. If user asks for "all"/"all services"/"full rollout" and metadata lacks complete candidate values → run `job-parameters` before expanding values.
 6. Do not use parameter names or meanings not present in metadata or Jenkins job definitions.
 7. For required parameters with no clear value/default → ask user to choose.
 8. For ambiguous intent → ask one focused question, not guess.
 9. Build explicit `name=value` pairs only after all required values are known.
-10. Run `./skills/jenkins/scripts/helper.py trigger-command --param Name=value ...` to generate CLI argv and validate parameter names.
+10. Run `./skills/jenkins/scripts/helper.py trigger-command --job-path <metadata.jobPath> --available-param <name> ... --param Name=value ...` to generate CLI argv. Pass one `--available-param` for each parameter name from the metadata source used above.
 11. Present job path, final parameters, and full CLI command to user.
 12. Trigger only after explicit user confirmation.
 13. Poll job JSON API until `lastBuild.number` increases, then track that build to terminal state.

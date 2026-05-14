@@ -98,7 +98,7 @@ All commands run from current project root.
 | --- | --- |
 | `./skills/jenkins/scripts/helper.py metadata` | Derive git context, validate runtime config, return merged parameter metadata |
 | `./skills/jenkins/scripts/helper.py job-parameters` | Read actual Jenkins job parameter definitions and candidate values |
-| `./skills/jenkins/scripts/helper.py trigger-command --param Name=value ...` | Validate parameter names, output Jenkins CLI argv |
+| `./skills/jenkins/scripts/helper.py trigger-command --job-path <path> --available-param <name> ... --param Name=value ...` | Validate parameter names from preflight metadata, output Jenkins CLI argv |
 | `./skills/jenkins/scripts/helper.py last-build` | Read latest build metadata |
 | `./skills/jenkins/scripts/helper.py console-log [--build-number N] [--tail 80]` | Read console log text |
 
